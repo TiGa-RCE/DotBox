@@ -1,0 +1,38 @@
+# DotBox contributor guidance
+
+Read README.md and docs/PRODUCT.md before implementation. The repository starts
+as a design baseline; do not describe planned behavior as a working release.
+
+## Product boundaries
+
+- Target visible DOSBox-X play on Dot's own computer and its takeover flow.
+- Permit one-time bounded preparation, persist learned controls, and reuse
+  compatible harnesses without repeating discovery.
+- Keep the original graphical game authoritative. Z is the shared action and
+  observation interface; its representation is optional for the user.
+- Build operational harness slices during play. Full game recovery, QEMU and
+  the UDL/UIL/UDC conversion pipeline are outside the first release.
+- Prefer interpreter state for supported engines; keep the named Dune case
+  held out from initial engine-specific development and record prior exposure.
+- Distinguish observed game progression from harness coverage.
+
+## Evidence and implementation
+
+Use supported runtime/control APIs. Verify takeover-state access before relying
+on it. One controller owns live guest mutation; background work consumes frozen
+observations and proposes updates. Preserve existing harness revisions and
+private evidence. Verify current state before reusing prior benchmark claims.
+
+Keep original commercial game files, assets, saves, emulator states, private
+analysis databases, raw memory dumps and credentials outside Git. Public harness
+analysis should be small, authored and sufficient for operational adaptation.
+Do not import target-derived material or code without reviewing its publication
+scope and required license/attribution notices.
+
+Make incremental changes and run proportionate checks. Validate the actual Dot
+runtime before choosing Python versions or bundling dependencies. Do not infer
+that fDisBull package qualification also qualifies DotBox or an untested host.
+
+Read docs/REPOSITORIES.md before publication. Preserve both account repositories
+and their independent histories. Do not force-push, install synchronization,
+publish packages or create scheduled work merely to complete a coding slice.
