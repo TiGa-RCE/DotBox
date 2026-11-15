@@ -122,6 +122,10 @@ or logs. Give workers the allowed observation subset. Generic control mechanics
 can be shared without target secrets; a worker that needs forbidden facts should
 return a sanitized operational result or defer the action. An isolated future
 scene does not authorize using its information in the current game.
+If forbidden information has already reached the lead, record that exposure and
+qualify subsequent blind-play claims; withholding it from the user does not undo
+the lead's knowledge. Restrict further inputs and continue only within the agreed
+information policy.
 
 Keep the user-facing response about the current game and available actions.
 Routine research belongs in the background dossier. A real block, consequential
