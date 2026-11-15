@@ -141,7 +141,8 @@
     "publication": "Candidate reviewed and incorporated into scene-v5 between actions.",
     "post_publication_test": "Named hall_right executed from hall; coordinator inspected terrace frame51.",
     "isolation": "Worker received a frozen frame and observed input recipe; no live guest/project access.",
-    "claim": "Effective play occurred while a candidate was pending; uninterrupted or spontaneously autonomous background growth is not established."
+    "claim": "Effective play occurred while a candidate was pending; uninterrupted or spontaneously autonomous background growth is not established.",
+    "worker_work": "A separately contacted child agent confirmed it viewed the frozen hall frame and packaged an already supplied observed recipe. This phase does not demonstrate independent control discovery or substantial new worker reasoning."
   },
   "skill_feedback": {
     "useful": [
