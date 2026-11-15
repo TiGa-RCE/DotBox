@@ -116,3 +116,7 @@ another client reusing a revision, incremental revision preservation, and contro
 reused after full owner/guest shutdown. Real-game outcomes and interruption
 timings remain separately scoped evidence; the earlier
 [Dune trial](evidence/dune-local-terra-2026-11-15.json) predates persisted mouse actions.
+The [persisted-mouse retest](evidence/persisted-mouse-dune-2026-11-15.json)
+verified five accepted actions and three visual transitions with a fresh local
+Terra agent. It records the missed startup budget and distinguishes coordination
+acknowledgments from exact guest pauses or complete player interruptions.
