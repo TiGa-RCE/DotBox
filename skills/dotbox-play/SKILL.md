@@ -15,7 +15,9 @@ be established from the installed build and current session.
 
 The play lead owns live guest mutation and selects harness revisions. A worker
 answers one bounded question from frozen observations and returns a separate
-candidate. Read [continuous play](references/continuous-play.md) for cloud
+candidate. Read [runtime controls](references/runtime-controls.md) before the
+first DotBox recipe; use its persisted absolute mouse actions instead of writing
+a private click wrapper. Read [continuous play](references/continuous-play.md) for cloud
 lifecycle, worker briefs, promotion and control handoff. With no workers, alternate
 short authoring steps with play through the same live owner.
 
@@ -32,18 +34,38 @@ supported ownership signal when available; otherwise coordinate handoff explicit
 
 ## Prepare a small opening buffer
 
-For a new game without a compatible harness, choose a short recon budget. Learn
+Before the first launch or input, write a private `run_start` event with UTC,
+`monotonic_ns`, clock identity, the source/skill revision, and an explicit
+`preparation_budget_s` (default **180 seconds** unless the task specifies another
+limit). Record the deadline and readiness condition: current play and the next
+likely transition have an observed named action or ordinary-input fallback.
+This small record is the first preparation step, not a report reconstructed at
+the end. Include reasoning, dispatch, authoring and tool delays on this clock.
+
+For a new game without a compatible harness, learn
 the startup/menu route, bounded movement or selection, stop/release, primary
 interaction and back/cancel as applicable. Retain a few useful opening Z scenes
 or routes with observed entry conditions, expected results and input fallbacks.
 A turn-based game may need selection/submission instead of actor movement.
 
-End preparation when the current scene and next likely transition are usable
-through a verified named action or ordinary controls. Treat a few minutes as a
-product target to measure, not a guaranteed delay. Do not require a fixed scene
-count, save support, full engine recovery or distant-level coverage. At the
-budget boundary, publish the working subset and resolve only a real play blocker.
+End preparation when that readiness condition holds and write `buffer_usable`
+with its observed evidence. At the deadline, write `budget_expired` if it has not
+held, publish the working subset, and continue through available controls. Keep
+only a real blocker on the critical path. Do not extend or restart the clock to
+hide a miss. A budget expiry does not pause the game or require new permission.
+Do not require a fixed scene count, save support, full engine recovery or
+distant-level coverage. Treat a few minutes as a measured target, not a promise.
 For an existing game, fill its current gaps instead of repeating startup.
+
+Record `launch_requested` **before** spawning each owner, then its ready response,
+first completed frame, first useful input and first observed effect. Keep setup,
+installer and configured-game launches distinct while retaining the full elapsed
+timeline. Use one monotonic clock per interval; never infer missing starts from
+file mtimes. Mark every explicit pause/continue coordination window and blocked
+action, including failed inputs and observation gaps. Continue acknowledgments
+are asynchronous; their duration is a coordination metric, not exact paused time.
+Missing measurements stay unknown. For an evaluation, the coordinator also records
+a start before agent dispatch; do not relabel a configured replay as a cold start.
 
 ## Grow along the player's route
 

@@ -44,10 +44,22 @@ worker, learn the smallest missing input and publish a usable partial. Do not
 pause the game to finish a broad harness plan. Save/checkpoint discovery is useful
 when available, but must not gate otherwise working movement and interaction.
 
-Choose a finite recon/probe budget using the current game and available startup
-time. On expiry, keep the working subset, mark the actual gap and take a viable
-route if one exists. Do not declare a complete buffer to avoid reporting a blocker.
-Record actual user-visible waits so the process can improve from observation.
+Use the entrypoint's recorded preparation budget and deadline (default 180 s).
+Write them before launch/input. At readiness emit `buffer_usable`; on a miss emit
+`budget_expired` once, retain the working subset and use an available route.
+Never reset the deadline to make a long preparation look short. Record each
+launch before process creation and distinguish installer/setup from the configured
+game without dropping either from the end-to-end timeline. Capture actual waits,
+failed actions and observation gaps as they happen, not at the final summary.
+
+For persisted mouse controls, use [runtime controls](runtime-controls.md).
+Coordinates are absolute original-frame pixels. The server handles the bounded
+pause/fresh-frame/click/continue transaction; do not keep the guest paused while
+the model reads frames or writes recipes. Its returned coordination markers can
+be joined to the caller's command journal. A continue response acknowledges a
+command rather than the exact instant of guest resumption. Compare only the
+same interval definitions across trials; candidate-marker time is not the
+worker's full reasoning time, and a configured replay is not a cold run.
 
 ## Brief a worker with one near-term consumer
 

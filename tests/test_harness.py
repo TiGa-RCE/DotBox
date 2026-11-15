@@ -242,3 +242,186 @@ def test_control_count_limit_rejects_excess_without_changing_stored_revisions(pr
         library.save(definition, parent=revision)
     assert len(library.info(revision)["definition"]["macros"]) == 32
     assert len(library.list()["revisions"]) == 1
+
+
+def mouse_controls(*, x=159, y=88, width=320, height=200, name="playground"):
+    return {"format": "dotbox-control-set-1", "name": name, "controls": {
+        "choose": {"authority": "player-input", "steps": [{
+            "op": "mouse.click", "x": x, "y": y, "width": width, "height": height,
+            "button": "left", "hold_ms": 80}]}}}
+
+
+def test_absolute_mouse_revisions_survive_reopen_and_keep_legacy_parent(tmp_path):
+    program = tmp_path / "PLAY.COM"
+    program.write_bytes(bytes.fromhex("b8 00 4c cd 21"))
+    path = tmp_path / "play.fdb"
+    with Project.create(path, program, image="com") as opened:
+        library = HarnessLibrary(opened)
+        legacy = library.save(controls())["revision"]
+        definition = mouse_controls()
+        definition["controls"]["move"] = controls()["macros"]["move"]
+        first = library.save(definition, parent=legacy)["revision"]
+        changed = deepcopy(definition)
+        changed["controls"]["choose"]["steps"][0]["x"] = 19
+        newer = library.save(changed, parent=first)["revision"]
+        assert library.save(changed, parent=first)["revision"] == newer
+    with Project(path) as opened:
+        library = HarnessLibrary(opened)
+        assert library.info(first)["definition"] == definition
+        assert library.info(first)["parent"] == legacy
+        assert library.plan(first, "choose")["steps"] == [{"op": "click", "params": {
+            "x": 159, "y": 88, "width": 320, "height": 200, "button": "left", "hold_ms": 80}}]
+        assert library.plan(newer, "choose")["steps"][0]["params"]["x"] == 19
+        assert library.plan(first, "move")["steps"][0]["op"] == "key"
+        assert {row["revision"] for row in library.list()["revisions"]} == {legacy, first, newer}
+        assert library.info(first)["binding"]["source_sha256"] == opened.source_binding_sha256(1)
+
+
+@pytest.mark.parametrize("field,value", [
+    ("x", True), ("x", 1.0), ("x", -1), ("x", 320),
+    ("y", False), ("y", 2.5), ("y", -1), ("y", 200),
+    ("width", True), ("width", 0), ("width", 4097), ("width", 320.0),
+    ("height", False), ("height", 0), ("height", 4097),
+    ("button", "double"), ("hold_ms", True), ("hold_ms", 0), ("hold_ms", 1001),
+    ("dx", 2), ("dy", 2), ("relative", False), ("frame_id", 12),
+    ("mode_id", 4), ("session_id", "old-session"), ("generation", 0),
+    ("unexpected", "ignored"),
+])
+def test_invalid_absolute_mouse_fields_reject_whole_revision(project, field, value):
+    library = HarnessLibrary(project)
+    definition = mouse_controls()
+    definition["controls"]["choose"]["steps"][0][field] = value
+    with pytest.raises(ValueError):
+        library.save(definition)
+    assert library.list() == {"revisions": [], "truncated": False}
+    assert not project.db.execute("SELECT 1 FROM sqlite_master WHERE name='dotbox_control_sets'").fetchone()
+
+
+@pytest.mark.parametrize("missing", ["x", "y", "width", "height"])
+def test_mouse_requires_absolute_position_and_original_dimensions(project, missing):
+    definition = mouse_controls()
+    del definition["controls"]["choose"]["steps"][0][missing]
+    with pytest.raises(ValueError):
+        HarnessLibrary(project).save(definition)
+
+
+@pytest.mark.parametrize("extra", [
+    {"op": "mouse.click", "x": 1, "y": 2, "width": 320, "height": 200},
+    {"op": "keyboard.press", "key": "enter"},
+])
+def test_mixed_or_multiple_mouse_steps_reject_before_save(project, extra):
+    definition = mouse_controls()
+    definition["controls"]["choose"]["steps"].append(extra)
+    with pytest.raises(ValueError, match="exactly one"):
+        HarnessLibrary(project).save(definition)
+
+
+@pytest.mark.parametrize("change", [
+    {"authority": "diagnostic"}, {"authority": "authoring"},
+    {"parameters": {}}, {"outputs": {}}, {"unknown": True},
+    {"steps": None},
+])
+def test_mouse_control_declarations_reject_unsafe_authority_and_unknowns(project, change):
+    definition = mouse_controls()
+    definition["controls"]["choose"].update(change)
+    with pytest.raises(ValueError):
+        HarnessLibrary(project).save(definition)
+
+
+def test_mouse_definition_budget_and_json_policy_precede_storage(project):
+    library = HarnessLibrary(project)
+    for value in ("x" * (48 * 1024), float("nan"), {"nested": object()}):
+        definition = mouse_controls()
+        definition["provenance"] = value
+        with pytest.raises(ValueError):
+            library.save(definition)
+    definition = mouse_controls()
+    definition["controls"]["other"] = {"steps": [{"op": "keyboard.press", "key": "bogus-key"}]}
+    with pytest.raises(ValueError):
+        library.save(definition)
+    assert not library.list()["revisions"]
+
+
+def test_mouse_row_hash_and_source_binding_are_verified(tmp_path):
+    first_program, second_program = tmp_path / "A.COM", tmp_path / "B.COM"
+    first_program.write_bytes(bytes.fromhex("b8 00 4c cd 21"))
+    second_program.write_bytes(bytes.fromhex("90 b8 00 4c cd 21"))
+    with Project.create(tmp_path / "a.fdb", first_program, image="com") as first:
+        library = HarnessLibrary(first)
+        revision = library.save(mouse_controls())["revision"]
+        record = tuple(first.db.execute("SELECT * FROM dotbox_control_sets WHERE id=?", (revision,)).fetchone())
+        with Project.create(tmp_path / "b.fdb", second_program, image="com") as second:
+            # Establish the schema through a normal save, then inject the exact
+            # valid first-project row without altering its hash or binding.
+            HarnessLibrary(second).save(mouse_controls())
+            with second.transaction(True):
+                second.db.execute("INSERT INTO dotbox_control_sets VALUES (?,?,?,?,?,?,?)", record)
+            with pytest.raises(ValueError, match="source binding"):
+                HarnessLibrary(second).plan(revision, "choose")
+        with first.transaction(True):
+            first.db.execute("UPDATE dotbox_control_sets SET document=replace(document, '159', '158') WHERE id=?", (revision,))
+        with pytest.raises(ValueError, match="hash mismatch"):
+            library.info(revision)
+
+
+def test_mouse_revision_rejects_a_different_selected_byte_version(project):
+    library = HarnessLibrary(project)
+    revision = library.save(mouse_controls())["revision"]
+    address = project.regions(1)[0].start
+    patched = project.patch(address, "90", version=1)
+    with pytest.raises(ValueError, match="binding"):
+        HarnessLibrary(project, version=patched["version"]).info(revision)
+    assert HarnessLibrary(project, version=1).info(revision)["revision"] == revision
+
+
+def test_dotbox_and_legacy_children_preserve_explicit_parent_chains(project):
+    library = HarnessLibrary(project)
+    first = library.save(mouse_controls())["revision"]
+    sibling = library.save(mouse_controls(x=1), parent=first)["revision"]
+    legacy = library.save(controls(), parent=first)["revision"]
+    assert library.info(legacy)["parent"] == first
+    assert library.info(legacy)["definition"]["format"] == "fdisbull-macro-set-1"
+    assert library.plan(legacy, "move")["steps"][0]["op"] == "key"
+    assert library.plan(first, "choose")["steps"][0]["params"]["x"] == 159
+    assert library.plan(sibling, "choose")["steps"][0]["params"]["x"] == 1
+    with pytest.raises(ValueError):
+        library.save(mouse_controls(name="other"), parent=first)
+    with pytest.raises(ValueError):
+        library.save(mouse_controls(), parent="0" * 64)
+
+
+@pytest.mark.parametrize('mutation', ['authority', 'operation', 'extra', 'definition'])
+def test_rehashed_persisted_mouse_documents_still_enforce_the_play_schema(project, mutation):
+    import hashlib
+    import json
+    library = HarnessLibrary(project)
+    revision = library.save(mouse_controls())["revision"]
+    row = dict(project.db.execute("SELECT * FROM dotbox_control_sets WHERE id=?", (revision,)).fetchone())
+    document = json.loads(row['document'])
+    if mutation == 'authority':
+        document['definition']['controls']['choose']['authority'] = 'diagnostic'
+    elif mutation == 'operation':
+        document['definition']['controls']['choose']['steps'][0]['op'] = 'memory.write'
+    elif mutation == 'extra':
+        document['definition']['controls']['choose']['steps'][0]['dx'] = 10
+    else:
+        document['definition'] = []
+    encoded = json.dumps(document, sort_keys=True, separators=(',', ':'), allow_nan=False)
+    forged = hashlib.sha256(encoded.encode()).hexdigest()
+    with project.transaction(True):
+        project.db.execute('INSERT INTO dotbox_control_sets VALUES (?,?,?,?,?,?,?)', (
+            forged, row['version'], row['parent'], row['created'], row['author'], forged, encoded))
+    with pytest.raises(ValueError):
+        library.info(forged)
+    assert library.info(revision)['revision'] == revision
+
+
+def test_legacy_format_cannot_smuggle_mouse_into_core_macros(project):
+    from fdisbull.input_macros import PRIMITIVES
+    before = set(PRIMITIVES)
+    definition = controls()
+    definition['macros']['move']['steps'] = mouse_controls()['controls']['choose']['steps']
+    with pytest.raises(ValueError):
+        HarnessLibrary(project).save(definition)
+    assert set(PRIMITIVES) == before and 'mouse.click' not in PRIMITIVES
+    assert not HarnessLibrary(project).list()['revisions']

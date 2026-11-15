@@ -440,3 +440,313 @@ def test_native_last_stop_schema_preserves_breakpoint_across_handoff(adapter):
         assert [method for method, _ in native.calls].count('execution.continue') == 1
     finally:
         b.close()
+
+
+def mouse_plan():
+    return {'revision': 'a' * 64, 'name': 'choose', 'queued_guest_ms': 80,
+            'steps': [{'op': 'click', 'params': {
+                'x': 0, 'y': 0, 'width': 1, 'height': 1, 'button': 'left', 'hold_ms': 80}}]}
+
+
+def test_named_absolute_mouse_pauses_uses_fresh_frame_and_resumes_once(adapter, monkeypatch):
+    config, native, _ = adapter
+    b = backend.FDisBullBackend(config)
+    monkeypatch.setattr(b, '_harness', lambda: SimpleNamespace(plan=lambda *_: mouse_plan()))
+    try:
+        b.play()
+        before = len(native.calls)
+        reply = b.act({'revision': 'a' * 64, 'name': 'choose'}, generation=0)
+        methods = [m for m, _ in native.calls[before:]]
+        assert methods.count('execution.pause') == 1
+        assert methods.count('execution.wait') == 1
+        assert methods.count('video.screenshot') == 1
+        assert methods.count('input.mouse.click') == 1
+        assert methods.count('execution.continue') == 1
+        assert methods.index('execution.wait') < methods.index('video.screenshot') < methods.index('input.mouse.click') < methods.index('execution.continue')
+        assert next(p for m, p in native.calls[before:] if m == 'input.mouse.click') == {
+            'x': 0, 'y': 0, 'button': 'left', 'hold_ms': 80,
+            'frame_id': 12, 'mode_id': 4, 'control_generation': 0}
+        coordination = reply['coordination']
+        assert coordination['resume_acknowledged'] is True
+        assert coordination['resume_observed'] is False
+        assert coordination['status'] == 'resume_acknowledged'
+        assert [event['stage'] for event in coordination['events']] == [
+            'started', 'pause_requested', 'stopped', 'frame_captured', 'click_acknowledged', 'resume_requested', 'resume_acknowledged']
+        times = [event['monotonic_ns'] for event in coordination['events']]
+        assert times == sorted(times)
+        assert reply['transition_verified'] is False and native.state == 'running'
+    finally:
+        b.close()
+
+
+@pytest.mark.parametrize('change', [
+    {'width': 2}, {'height': 2},
+])
+def test_named_mouse_size_mismatch_leaves_paused_without_input_or_resume(adapter, monkeypatch, change):
+    from dotbox.harness import ActionInterrupted
+    config, native, _ = adapter
+    b = backend.FDisBullBackend(config)
+    plan = mouse_plan()
+    plan['steps'][0]['params'].update(change)
+    monkeypatch.setattr(b, '_harness', lambda: SimpleNamespace(plan=lambda *_: plan))
+    try:
+        b.play()
+        before = len(native.calls)
+        with pytest.raises(ActionInterrupted, match='dimensions') as failure:
+            b.act({'revision': plan['revision'], 'name': plan['name']}, generation=0)
+        assert failure.value.progress['completed_steps'] == []
+        assert failure.value.progress['coordination']['resume_acknowledged'] is False
+        assert native.state == 'stopped' and not native.closed
+        assert not any(m in ('input.mouse.click', 'execution.continue') for m, _ in native.calls[before:])
+    finally:
+        b.close()
+
+
+@pytest.mark.parametrize('owner,generation', [('host', 0), ('agent', 1)])
+def test_named_mouse_requires_current_agent_before_any_pause_or_input(adapter, monkeypatch, owner, generation):
+    config, native, _ = adapter
+    b = backend.FDisBullBackend(config)
+    monkeypatch.setattr(b, '_harness', lambda: SimpleNamespace(plan=lambda *_: mouse_plan()))
+    try:
+        b.play()
+        native.owner = owner
+        before = len(native.calls)
+        with pytest.raises(ValueError):
+            b.act({'revision': 'a' * 64, 'name': 'choose'}, generation=generation)
+        assert native.state == 'running'
+        assert not any(m in ('execution.pause', 'execution.continue', 'input.mouse.click') for m, _ in native.calls[before:])
+    finally:
+        b.close()
+
+
+@pytest.mark.parametrize('mutation', ['breakpoint', 'exited', 'ownership'])
+@pytest.mark.parametrize('after_method', ['execution.wait', 'video.screenshot', 'input.mouse.click'])
+def test_named_mouse_preserves_unexpected_stop_or_ownership_without_resume(adapter, monkeypatch, mutation, after_method):
+    from dotbox.harness import ActionInterrupted
+    config, native, _ = adapter
+    b = backend.FDisBullBackend(config)
+    monkeypatch.setattr(b, '_harness', lambda: SimpleNamespace(plan=lambda *_: mouse_plan()))
+    original = native.call
+
+    def changed(method, params=None):
+        result = original(method, params)
+        if method == after_method:
+            if mutation == 'ownership':
+                native.owner = 'host'
+                native.generation += 1
+            else:
+                native.state = 'stopped' if mutation == 'breakpoint' else 'exited'
+                native.last_stop = {'kind': mutation}
+        return result
+
+    try:
+        b.play()
+        before = len(native.calls)
+        monkeypatch.setattr(native, 'call', changed)
+        with pytest.raises(ActionInterrupted) as failure:
+            b.act({'revision': 'a' * 64, 'name': 'choose'}, generation=0)
+        progress = failure.value.progress
+        click_count = sum(m == 'input.mouse.click' for m, _ in native.calls[before:])
+        assert click_count == (1 if after_method == 'input.mouse.click' else 0)
+        assert len(progress['completed_steps']) == click_count
+        assert progress['coordination']['resume_acknowledged'] is False
+        assert not any(m == 'execution.continue' for m, _ in native.calls[before:])
+        assert not native.closed
+        if mutation == 'ownership':
+            assert native.owner == 'host'
+        else:
+            assert native.last_stop == {'kind': mutation}
+    finally:
+        b.close()
+
+
+def test_named_mouse_breakpoint_winning_pause_is_preserved(adapter, monkeypatch):
+    from dotbox.harness import ActionInterrupted
+    config, native, _ = adapter
+    b = backend.FDisBullBackend(config)
+    monkeypatch.setattr(b, '_harness', lambda: SimpleNamespace(plan=lambda *_: mouse_plan()))
+    try:
+        b.play()
+        native.pause_race = True
+        before = len(native.calls)
+        with pytest.raises(ActionInterrupted, match='Breakpoint or exit'):
+            b.act({'revision': 'a' * 64, 'name': 'choose'}, generation=0)
+        assert native.last_stop == {'kind': 'breakpoint'}
+        assert not any(m in ('video.screenshot', 'input.mouse.click', 'execution.continue') for m, _ in native.calls[before:])
+    finally:
+        b.close()
+
+
+@pytest.mark.parametrize('failure_method', ['input.mouse.click', 'execution.continue'])
+def test_named_mouse_ambiguous_rpc_is_not_replayed_or_resumed(adapter, monkeypatch, failure_method):
+    from dotbox.harness import ActionInterrupted
+    config, native, _ = adapter
+    b = backend.FDisBullBackend(config)
+    monkeypatch.setattr(b, '_harness', lambda: SimpleNamespace(plan=lambda *_: mouse_plan()))
+    original = native.call
+
+    def lost_ack(method, params=None):
+        result = original(method, params)
+        if method == failure_method:
+            raise TimeoutError('transport lost after dispatch')
+        return result
+
+    try:
+        b.play()
+        before = len(native.calls)
+        monkeypatch.setattr(native, 'call', lost_ack)
+        with pytest.raises(ActionInterrupted, match='transport lost') as failure:
+            b.act({'revision': 'a' * 64, 'name': 'choose'}, generation=0)
+        progress = failure.value.progress
+        assert 'unknown' in progress['outcome']
+        assert len(progress['completed_steps']) == (1 if failure_method == 'execution.continue' else 0)
+        assert progress['coordination']['resume_acknowledged'] is False
+        assert sum(m == 'input.mouse.click' for m, _ in native.calls[before:]) == 1
+        assert sum(m == 'execution.continue' for m, _ in native.calls[before:]) == (1 if failure_method == 'execution.continue' else 0)
+        assert not native.closed
+    finally:
+        b.close()
+
+
+def test_named_mouse_uses_new_ids_each_time_without_changing_absolute_position(adapter, monkeypatch):
+    config, native, _ = adapter
+    b = backend.FDisBullBackend(config)
+    plan = mouse_plan()
+    plan['steps'][0]['params'].update(x=159, y=88, width=320, height=200)
+    monkeypatch.setattr(b, '_harness', lambda: SimpleNamespace(plan=lambda *_: plan))
+    original = native.call
+    frame_id = 12
+
+    def fresh(method, params=None):
+        nonlocal frame_id
+        result = original(method, params)
+        if method == 'video.screenshot':
+            assert native.state == 'stopped'
+            frame_id += 7
+            result.update(width=320, height=200, frame_id=frame_id, mode_id=frame_id + 100)
+        if method == 'input.mouse.click':
+            assert native.state == 'stopped'
+            assert params['frame_id'] == frame_id and params['mode_id'] == frame_id + 100
+        return result
+
+    try:
+        b.play()
+        monkeypatch.setattr(native, 'call', fresh)
+        for _ in range(2):
+            b.act({'revision': plan['revision'], 'name': plan['name']}, generation=0)
+        delivered = [p for m, p in native.calls if m == 'input.mouse.click']
+        assert [(p['x'], p['y']) for p in delivered] == [(159, 88), (159, 88)]
+        assert [p['frame_id'] for p in delivered] == [19, 26]
+        assert all('width' not in p and 'height' not in p for p in delivered)
+    finally:
+        b.close()
+
+
+@pytest.mark.parametrize('field,value', [('frame_id', None), ('mode_id', True), ('frame_id', 1.5)])
+def test_named_mouse_invalid_live_ids_never_reach_input_or_resume(adapter, monkeypatch, field, value):
+    from dotbox.harness import ActionInterrupted
+    config, native, _ = adapter
+    b = backend.FDisBullBackend(config)
+    monkeypatch.setattr(b, '_harness', lambda: SimpleNamespace(plan=lambda *_: mouse_plan()))
+    original = native.call
+
+    def bad_frame(method, params=None):
+        result = original(method, params)
+        if method == 'video.screenshot':
+            result[field] = value
+        return result
+
+    try:
+        b.play()
+        before = len(native.calls)
+        monkeypatch.setattr(native, 'call', bad_frame)
+        with pytest.raises(ActionInterrupted):
+            b.act({'revision': 'a' * 64, 'name': 'choose'}, generation=0)
+        assert native.state == 'stopped'
+        assert not any(m in ('input.mouse.click', 'execution.continue') for m, _ in native.calls[before:])
+    finally:
+        b.close()
+
+
+def test_named_mouse_failed_acceptance_leaves_paused_without_replay_or_resume(adapter, monkeypatch):
+    from dotbox.harness import ActionInterrupted
+    config, native, _ = adapter
+    b = backend.FDisBullBackend(config)
+    monkeypatch.setattr(b, '_harness', lambda: SimpleNamespace(plan=lambda *_: mouse_plan()))
+    original = native.call
+
+    def declined(method, params=None):
+        result = original(method, params)
+        if method == 'input.mouse.click':
+            result['accepted'] = False
+        return result
+
+    try:
+        b.play()
+        before = len(native.calls)
+        monkeypatch.setattr(native, 'call', declined)
+        with pytest.raises(ActionInterrupted, match='acceptance') as failure:
+            b.act({'revision': 'a' * 64, 'name': 'choose'}, generation=0)
+        assert not failure.value.progress['completed_steps']
+        assert native.state == 'stopped' and not native.closed
+        assert sum(m == 'input.mouse.click' for m, _ in native.calls[before:]) == 1
+        assert not any(m == 'execution.continue' for m, _ in native.calls[before:])
+    finally:
+        b.close()
+
+
+def test_named_mouse_state_revision_change_without_receipt_boundary_is_preserved(adapter, monkeypatch):
+    from dotbox.harness import ActionInterrupted
+    config, native, _ = adapter
+    b = backend.FDisBullBackend(config)
+    monkeypatch.setattr(b, '_harness', lambda: SimpleNamespace(plan=lambda *_: mouse_plan()))
+    original = native.call
+    clicked = False
+
+    def changed(method, params=None):
+        nonlocal clicked
+        result = original(method, params)
+        if method == 'input.mouse.click':
+            clicked = True
+        if method == 'session.status' and clicked:
+            result['state_revision'] = 2
+        return result
+
+    try:
+        b.play()
+        before = len(native.calls)
+        monkeypatch.setattr(native, 'call', changed)
+        with pytest.raises(ActionInterrupted, match='state changed') as failure:
+            b.act({'revision': 'a' * 64, 'name': 'choose'}, generation=0)
+        assert len(failure.value.progress['completed_steps']) == 1
+        assert native.state == 'stopped'
+        assert not any(m == 'execution.continue' for m, _ in native.calls[before:])
+    finally:
+        b.close()
+
+
+def test_named_mouse_honors_a_new_state_revision_in_the_click_receipt(adapter, monkeypatch):
+    config, native, _ = adapter
+    b = backend.FDisBullBackend(config)
+    monkeypatch.setattr(b, '_harness', lambda: SimpleNamespace(plan=lambda *_: mouse_plan()))
+    original = native.call
+    clicked = False
+
+    def advanced(method, params=None):
+        nonlocal clicked
+        result = original(method, params)
+        if method == 'input.mouse.click':
+            clicked = True
+            result['state_revision'] = 2
+        if method == 'session.status' and clicked:
+            result['state_revision'] = 2
+        return result
+
+    try:
+        b.play()
+        monkeypatch.setattr(native, 'call', advanced)
+        result = b.act({'revision': 'a' * 64, 'name': 'choose'}, generation=0)
+        assert result['coordination']['resume_acknowledged'] is True
+        assert native.state == 'running'
+    finally:
+        b.close()

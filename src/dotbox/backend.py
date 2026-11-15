@@ -168,6 +168,9 @@ class FDisBullBackend:
             return current
         if current.get('state') != 'stopped':
             raise ValueError('Cannot play an exited or unavailable guest')
+        return self._continue()
+
+    def _continue(self):
         result = self._call('execution.continue')
         operation = result.get('operation_id')
         if not isinstance(operation, str) or not operation:
@@ -277,6 +280,8 @@ class FDisBullBackend:
         from .harness import ActionInterrupted
         data = _parameters(params, ('revision', 'name'), ('revision', 'name'))
         plan = self._harness().plan(data['revision'], data['name'])
+        if any(step['op'] == 'click' for step in plan['steps']):
+            return self._act_mouse(plan, generation)
         completed = []
         with self._deadline_scope(self._session, time.monotonic() + 1,
                                   rpc_ms=1000, admission_ms=0, cleanup_ms=0):
@@ -299,6 +304,100 @@ class FDisBullBackend:
         return {'revision': plan['revision'], 'name': plan['name'],
                 'queued_guest_ms': plan['queued_guest_ms'], 'steps': completed,
                 'claim': 'Input accepted/queued; observe a new frame to verify the game outcome',
+                'transition_verified': False}
+
+    def _act_mouse(self, plan, generation):
+        """Bind one persisted absolute click to a fresh stopped guest frame.
+
+        This is one serialized service operation with a bounded RPC deadline.
+        A failed or ambiguous RPC never triggers a replay or automatic resume.
+        """
+        from .harness import ActionInterrupted
+        if len(plan['steps']) != 1 or plan['steps'][0]['op'] != 'click':
+            raise ValueError('Mouse controls require exactly one click')
+        params = _parameters(plan['steps'][0]['params'],
+                             ('x', 'y', 'width', 'height', 'button', 'hold_ms'),
+                             ('x', 'y', 'width', 'height'))
+        for field in ('width', 'height'):
+            _integer(params[field], field, 1, 4096)
+        _integer(params['x'], 'x', 0, params['width'] - 1)
+        _integer(params['y'], 'y', 0, params['height'] - 1)
+        params.setdefault('button', 'left')
+        params.setdefault('hold_ms', 80)
+        if params['button'] not in ('left', 'right', 'middle'):
+            raise ValueError('button must be left, right or middle')
+        _integer(params['hold_ms'], 'hold_ms', 1, 1000)
+        coordination = {'status': 'started', 'resume_acknowledged': False,
+                        'resume_observed': False, 'events': []}
+
+        def stamp(stage, **metadata):
+            coordination['status'] = stage
+            coordination['events'].append({'stage': stage, 'monotonic_ns': time.monotonic_ns(), **metadata})
+
+        def stopped_boundary(expected_revision=None):
+            status = _stop_metadata(self._call('session.status'))
+            reason = status.get('stop_reason')
+            kind = reason.get('kind') if isinstance(reason, dict) else reason
+            if status.get('state') != 'stopped' or kind != 'pause':
+                raise RuntimeError('Guest left the coordinated pause boundary; inspect before continuing')
+            if expected_revision is not None and status.get('state_revision') != expected_revision:
+                raise RuntimeError('Guest state changed at the coordinated pause boundary')
+            return status
+
+        completed = []
+        stamp('started')
+        with self._deadline_scope(self._session, time.monotonic() + 4,
+                                  rpc_ms=1000, admission_ms=0, cleanup_ms=0):
+            # All definition validation and initial admission precede pause or
+            # input. Host ownership never causes even an execution mutation.
+            self._require_agent(generation)
+            if self._call('session.status').get('state') != 'running':
+                raise ValueError('Named controls require a running guest; play explicitly first')
+            try:
+                stamp('pause_requested')
+                paused = self.pause()
+                reason = paused.get('stop_reason')
+                kind = reason.get('kind') if isinstance(reason, dict) else reason
+                if paused.get('state') != 'stopped' or kind != 'pause':
+                    raise RuntimeError('Breakpoint or exit won the pause; guest preserved without click or resume')
+                self._require_agent(generation)
+                boundary = stopped_boundary(paused.get('state_revision'))
+                stamp('stopped', state_revision=boundary.get('state_revision'), stop_reason=reason)
+                frame = self.frame()
+                stamp('frame_captured', frame_id=frame.get('frame_id'), mode_id=frame.get('mode_id'),
+                      width=frame.get('width'), height=frame.get('height'))
+                if (type(frame.get('width')) is not int or type(frame.get('height')) is not int
+                        or (frame['width'], frame['height']) != (params['width'], params['height'])):
+                    raise ValueError('Original guest frame dimensions differ from the selected control')
+                stopped_boundary(boundary.get('state_revision'))
+                click = {key: params[key] for key in ('x', 'y', 'button', 'hold_ms')}
+                click.update(frame_id=frame.get('frame_id'), mode_id=frame.get('mode_id'))
+                result = self.click(click, generation)
+                if result.get('accepted') is not True:
+                    raise RuntimeError('Backend did not acknowledge input acceptance')
+                completed.append({'index': 0, 'op': 'click', 'result': result})
+                stamp('click_acknowledged')
+                self._require_agent(generation)
+                # An accepted click can advance the backend's state revision;
+                # its receipt supplies that boundary when present. Stop kind
+                # and ownership must still match before our sole continue.
+                stopped_boundary(result.get('state_revision', boundary.get('state_revision')))
+                self._require_agent(generation)
+                stamp('resume_requested')
+                # Do not call play(), which permits explicit resumption from
+                # any stopped reason. Only our just-validated pause qualifies.
+                resumed = self._continue()
+                coordination['resume_acknowledged'] = True
+                stamp('resume_acknowledged', operation_id=resumed.get('operation_id'))
+            except Exception as error:
+                coordination['status'] = 'interrupted'
+                coordination['events'].append({'stage': 'interrupted', 'monotonic_ns': time.monotonic_ns()})
+                raise ActionInterrupted(plan['revision'], plan['name'], completed, 0, error,
+                                        coordination=coordination) from error
+        return {'revision': plan['revision'], 'name': plan['name'],
+                'queued_guest_ms': plan['queued_guest_ms'], 'steps': completed,
+                'coordination': coordination,
+                'claim': 'Click accepted/queued and continue acknowledged; observe a fresh frame for game outcome and resumption',
                 'transition_verified': False}
 
     def close(self):

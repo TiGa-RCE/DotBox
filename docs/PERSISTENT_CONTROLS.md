@@ -1,10 +1,10 @@
 # Persistent starting controls
 
-This development slice saves a small learned keyboard vocabulary once and
-reuses it across client connections and service restarts. It uses fDisBull's
-existing immutable macro records in the same project database, with the original
-executable/mapped-byte bindings. No new harness serialization or replacement
-game is introduced.
+Save learned keyboard and absolute mouse controls once and reuse them across
+client connections and project/service reopen. Every invocation selects an
+immutable source/version-bound revision. Legacy keyboard vocabularies keep using
+fDisBull's existing macro records; `dotbox-control-set-1` adds an explicit DotBox
+control document in the same project database. There is no mutable latest head.
 
 This is the controls foundation of bounded preparation. It does not perform
 autonomous discovery, recognize scenes, read an AGI interpreter or prepare a
@@ -52,24 +52,52 @@ service's explicit native ownership.
 
 ## Add the next useful control
 
-Edit an authored JSON vocabulary using `fdisbull-macro-set-1`, then save it with
+Edit an authored JSON vocabulary, then save it with
 `--parent '<previous-revision-id>'`. This creates an immutable child revision;
 it does not change an active head or rewrite previous work. Explicit sibling
 branches are allowed. Every action selects the intended revision, so an older
 usable vocabulary remains available after a new discovery.
 
-Only fixed `player-input` keyboard.press and keyboard.type steps are admitted.
-The limits are 32 controls per vocabulary, 16 steps and 1,000 ms of queued input
-per control, and a 48 KiB definition. Text duration counts every character.
-Runtime parameters, symbolic references, held-key leases, nested macros,
-general debug scripts, memory operations and executable plugins are excluded.
+Legacy `fdisbull-macro-set-1` keyboard definitions remain valid. For mouse
+controls use `dotbox-control-set-1` with `controls` instead of `macros`:
+
+```json
+{
+  "format": "dotbox-control-set-1",
+  "name": "opening",
+  "controls": {
+    "open_panel": {
+      "authority": "player-input",
+      "steps": [{"op": "mouse.click", "x": 40, "y": 90,
+                 "width": 320, "height": 200, "button": "left", "hold_ms": 80}]
+    }
+  }
+}
+```
+
+Coordinates above are examples. `x,y` are absolute original guest-frame pixels,
+not movement deltas or host-window coordinates. Expected `width,height` must
+match at execution; a scene-specific action still needs an observed applicable
+scene. Runtime frame/mode IDs are captured fresh, never persisted. A mouse
+action contains exactly one click; mixed or multiple mouse steps are rejected
+before effects. Keyboard-only actions retain bounded multi-step sequences.
+
+The limits remain 32 controls per vocabulary, 16 keyboard steps and 1,000 ms of
+queued input per control, and a 48 KiB definition. Text duration counts every
+character. Runtime parameters, symbolic references, held-key leases, nested
+macros, general debug scripts, memory operations and executable plugins are excluded.
 Validation covers the whole vocabulary before saving and the complete selected
 plan before its first input. Other tools' broader macro records cannot bypass
 the smaller DotBox facade.
 
-Each admitted step uses the existing ownership-aware backend primitive, including
-native generation in the actual input RPC. One shared one-second RPC budget
-bounds the composed action. A failure after earlier input returns
+Each admitted step uses the ownership-aware backend primitive, including native
+generation in the actual input RPC. A mouse `act` performs a bounded internal
+pause, fresh-frame/dimension check, absolute click and explicit continue in one
+request. It requires a running agent-owned guest and preserves unexpected stops
+or ownership changes. No model inspection or recipe authoring occurs while this
+transaction is paused. Returned coordination markers bracket requests and
+responses; the continue acknowledgment is asynchronous, not exact resumed time.
+Keyboard-only execution keeps its existing bounded path. A failure after earlier input returns
 `action_interrupted` with acknowledged steps and the active step; effects may
 already exist and are neither replayed nor claimed rolled back. Reobserve the
 game before deciding what to do next.
@@ -83,7 +111,8 @@ checkpoint. A lease from the old service is refused. Game checkpoint selection,
 community package composition/import and complete scene preparation remain
 later gates. Existing fDisBull exporters remain reusable foundations for sharing.
 
-The local native acceptance demonstrates metadata authoring in human-control
-mode, movement through a named action, another client reusing it, an incremental
-revision preserving the earlier vocabulary, and reuse after full owner/guest
-shutdown. See [verification](VERIFICATION_CONTROL_REUSE.md).
+The native tests exercise metadata authoring in human-control mode, named input,
+another client reusing a revision, incremental revision preservation, and controls
+reused after full owner/guest shutdown. Real-game outcomes and interruption
+timings remain separately scoped evidence; the earlier
+[Dune trial](evidence/dune-local-terra-2026-11-15.json) predates persisted mouse actions.
