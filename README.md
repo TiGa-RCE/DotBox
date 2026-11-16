@@ -19,9 +19,9 @@ harness path, with direct agent input RPCs disabled. Codex's **Take over / Retur
 the outer WebRTC harness. The optional [ownership bridge](docs/OWNERSHIP_BRIDGE.md)
 uses fresh viewer observations to coordinate cooperating agent turns. Native
 ownership stays separate. A coordination-only receiver can run without an
-emulator. The real viewer-to-local-receiver path is verified; delivery to Dot's
-headless environment remains unqualified. The saved operations environment now
-starts; its current private TCP connection times out before SSH authentication.
+emulator. The real viewer-to-headless-receiver handoff is verified over the existing
+private SSH route, using harmless data callbacks. The saved operations environment
+starts. Actual desktop-tool input through the turn wrapper remains unqualified.
 
 Additional AGI readers, walking, game-specific routes and HUD experiments remain
 preserved in the original development checkout. They are deferred from this

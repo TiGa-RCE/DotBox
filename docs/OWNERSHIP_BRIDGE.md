@@ -170,28 +170,61 @@ not fenced by it.
 
 ## Verification boundary — 16 November 2026
 
-Local state, authenticated socket, transport and callback checks exercise this
-contract. The full source suite passes 333 checks with no skips. A fresh ordinary
-wheel installation passes 76 focused checks, including ten existing native/input
-checks, and matches all 20 runtime module identities. The Node observer passes
-35 cases. Native/input tests remain separate from the bridge's live qualification.
+The current source suite passes 359 checks with no skips. A fresh ordinary Mac
+wheel installation passes 97 selected checks, including existing real native
+checks. One source-tree-only static audit is excluded from that external test
+directory and covered by the full source suite. All 21 runtime modules match
+source, wheel and installation; fDisBull is unavailable there. The observer
+passes 41 checks, including atomic request replacement/deletion, unsafe
+replacements and in-place mutation. Retired request reads are discarded without
+stopping the pump; response-file validation remains strict.
 
-The existing Dot viewer supplied 93 compact observations accepted by a **local,
-data-only `OwnershipState` receiver**: 89 Dot-eligible and four human-blocked.
-Eight failed source exchanges stayed blocked. Reconnection produced 24 fresh Dot
-observations while the earlier lease stayed invalid, and the final viewer UI
-showed Dot control. These results do not place the receiver on Dot's computer
-or demonstrate a live desktop action through `run_turn_step`.
+The same 21 module identities match an ordinary wheel built and installed in the
+approved managed headless environment under Python 3.12.14. Its 54 selected
+isolated installed checks use real authenticated sockets and synthetic ownership.
+Those checks qualify cloud loopback operation separately from live delivery.
 
-The later [environment repair and coordinator verification](evidence/ownership-coordinator-2026-11-16.json)
-supersedes that startup failure: a fresh task using the same saved environment
-starts and checks out the intended private repository after the existing GitHub
-connection was refreshed. The old failed task stays failed. Current managed
-private TCP connections time out before SSH authentication, so live cloud
-delivery remains unqualified. There is no qualified Dot cloud receiver/deployment, atomic
-capture lock, server lease or guarantee against missed between-poll transitions.
-Keep raw observations, screenshots, routes, credentials and environment/chat IDs
-outside Git. Audio and gameplay work remain deferred.
+The saved environment now starts and checks out the intended private repository
+after the existing GitHub connection was refreshed. Both account connections
+remain present; the old failed task remains unusable. A separate network failure
+was traced to the intentional source allowlist. With the user's approval, one
+rule added only this runtime's access to the source host on TCP 22. Applied-filter
+readback preserves every earlier rule and the compiled SSH identity policy.
+The existing primary pinned SSH route then passed. No credentials, enrollment
+or source-environment settings changed. See [environment repair](CLOUD_ENVIRONMENT_REPAIR.md).
 
-The [sanitized verification report](evidence/ownership-bridge-2026-11-16.json)
-records the package identities, checks, bounded live witness and remaining gate.
+A local real authenticated coordinator accepted 126 exactly joined viewer samples:
+121 Dot and five human. Three harmless data callbacks cover initial permission,
+automatic return and reopening. A separate live cloud run accepted 56 exactly
+joined samples over the existing SSH route: 51 Dot and five human. A cooperating
+waiter resumed only after fresh Dot evidence following Return control. Its
+4.228-second wait includes the human-controlled interval; this is not a measured
+handoff detection latency. The original lease remained rejected in 52 recorded
+checks, although its release/expiry prevents attributing every rejection solely
+to takeover. Startup-gap recovery labels in that run are not admitted as proof
+of the later deliberate interruption.
+
+A separate strict cloud source-gap run accepts 23 exactly joined samples. After
+the opening callback, the observer is deliberately stopped and the source-host
+phase flag is armed. Two failures at the source-exchange callsite directly deny
+new claims and refuse the prior callback. A lease was still valid immediately
+before invalidation. Fresh observations after the gap authorize a callback
+under a distinct stream and lease; the old lease stays rejected. Assertions/API
+failures are fatal in this witness, and mandatory completion, exit status,
+empty stderr and descriptor/credential cleanup are verified independently.
+The flag proves it was armed when checked, rather than the exact instant a
+failed exchange began.
+
+These are sampled coordination checks with harmless headless data callbacks.
+Actual desktop input through `run_turn_step`, an atomic capture lock, server
+ownership events and a guarantee against missed between-poll transitions remain
+unqualified. The outer harness still owns keyboard/mouse capture and in-flight
+input. Native checks use the previously prepared executable; no native rebuild,
+portable-library or release installation qualification is added.
+
+The [current sanitized receipt](evidence/ownership-coordinator-2026-11-16.json)
+records exact package identities, live joins and remaining limits. The
+[earlier report](evidence/ownership-bridge-2026-11-16.json) remains a historical
+snapshot. Raw observations, screenshots, routes, credentials, account aliases
+and environment/chat identifiers stay outside Git. Sound and gameplay remain
+deferred.
