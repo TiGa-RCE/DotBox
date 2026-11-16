@@ -1,3 +1,3 @@
-"""Cooperative play over an explicitly prepared fDisBull DOSBox-X backend."""
+"""Independent cooperative DOSBox-X play framework, extracted from fDisBull."""
 
-__version__ = "0.1.0.dev0"
+__version__ = "0.1.0.dev1"

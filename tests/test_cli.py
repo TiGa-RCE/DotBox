@@ -22,7 +22,7 @@ def test_unavailable_native_backend_is_a_clear_cli_error(tmp_path, monkeypatch, 
     def unavailable(config):
         raise BackendUnavailable("Backend lacks cooperative input control")
 
-    monkeypatch.setattr("dotbox.backend.FDisBullBackend", unavailable)
+    monkeypatch.setattr("dotbox.backend.DOSBoxBackend", unavailable)
     args = ["serve", "--directory", str(tmp_path / "session"), "--project", "game.fdb",
             "--game-dir", "game", "--executable", "dosbox"]
     assert cli.main(args) == 1

@@ -56,7 +56,7 @@ def apply_overlay(source: Path, *, check: bool = False) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('source', type=Path, help='upstream source with the pinned fDisBull stable patch applied')
+    parser.add_argument('source', type=Path, help='upstream source with the pinned native base patch applied')
     parser.add_argument('--check', action='store_true', help='validate without changing source')
     args = parser.parse_args()
     try:

@@ -20,7 +20,6 @@ def test_controls_learned_during_human_play_survive_service_restart(tmp_path):
     executable = os.environ.get('DOTBOX_DOSBOX_EXECUTABLE')
     if not executable:
         pytest.skip('DOTBOX_DOSBOX_EXECUTABLE required for persistent-control native acceptance')
-    pytest.importorskip('fdisbull.project')
     Image = pytest.importorskip('PIL.Image')
     fixture_path = Path(__file__).resolve().parents[1] / 'examples/input_playground.py'
     spec = importlib.util.spec_from_file_location('dotbox_harness_fixture', fixture_path)

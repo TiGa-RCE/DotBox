@@ -12,7 +12,7 @@ import pytest
 from dotbox.client import Client, ClientError
 from dotbox.service import MAX_REQUEST, PROTOCOL, PlayService, encoded, receive_line
 
-LocalCredential = pytest.importorskip("fdisbull.local_auth").LocalCredential
+from dotbox.local_auth import LocalCredential
 
 
 class Game:
@@ -54,6 +54,12 @@ class Game:
         self.check("play")
         self.state = "running"
         return {"state": "running"}
+
+    def resume_after_handoff(self, owner, generation):
+        assert self.owner == owner and self.generation == generation
+        if self.state == "stopped" and self.reason in ("startup", "pause"):
+            return self.play()
+        return self.status()
 
     def pause(self):
         self.check("pause")
@@ -295,3 +301,40 @@ def test_private_descriptor_and_credential_reading_refuse_symlinks(running, tmp_
     link.symlink_to(descriptor)
     with pytest.raises(OSError):
         Client(link)
+
+
+def test_default_input_stays_with_desktop_harness_without_claiming_its_owner(tmp_path):
+    game = Game()
+    service = PlayService(lambda: game, tmp_path / "session")
+    service.backend = game
+    game.inputs.append("queued-before-transfer")
+    service._start_harness_input()
+    current = service.snapshot()
+    assert game.owner == "host" and game.state == "running" and not game.inputs
+    assert current["owner"] == "harness" and current["generation"] == 1
+    assert current["platform_takeover"] == {"owner": "unknown", "source": "unavailable"}
+    with LocalCredential("dotbox-harness-mode-test-") as credential:
+        for op in ("key", "type", "click", "act", "play", "pause"):
+            reply = service.handle({"protocol": PROTOCOL, "id": op,
+                                    "token": credential.path.read_text().strip(),
+                                    "op": op, "params": {},
+                                    "instance_id": current["instance_id"],
+                                    "expected_generation": current["generation"]}, credential)
+            assert reply["error"]["code"] == "harness_controls_input"
+    assert game.state == "running" and not game.inputs
+
+
+def test_harness_start_preserves_foreign_stop_and_rejects_ownership_race(tmp_path):
+    game = Game()
+    game.reason = "breakpoint"
+    service = PlayService(lambda: game, tmp_path / "session")
+    service.backend = game
+    service._start_harness_input()
+    assert game.state == "stopped" and "play" not in game.calls
+    game = Game()
+    game.drift_after_transfer = True
+    service = PlayService(lambda: game, tmp_path / "other-session")
+    service.backend = game
+    with pytest.raises(RuntimeError, match="ownership changed"):
+        service._start_harness_input()
+    assert "play" not in game.calls

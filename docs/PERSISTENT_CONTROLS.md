@@ -2,9 +2,10 @@
 
 Save learned keyboard and absolute mouse controls once and reuse them across
 client connections and project/service reopen. Every invocation selects an
-immutable source/version-bound revision. Legacy keyboard vocabularies keep using
-fDisBull's existing macro records; `dotbox-control-set-1` adds an explicit DotBox
-control document in the same project database. There is no mutable latest head.
+immutable source/version-bound revision in the independent DotBox store.
+Existing fDisBull FDBs are preserved and refused; see [storage scope](STANDALONE.md#storage-and-scope). Legacy keyboard vocabularies keep using
+the retained legacy keyboard document format; `dotbox-control-set-1` adds an explicit DotBox
+control document in the DotBox control database. There is no mutable latest head.
 
 This is the controls foundation of bounded preparation. It does not perform
 autonomous discovery, recognize scenes, read an AGI interpreter or prepare a
@@ -116,7 +117,7 @@ another client reusing a revision, incremental revision preservation, and contro
 reused after full owner/guest shutdown. Real-game outcomes and interruption
 timings remain separately scoped evidence; the earlier
 [Dune trial](evidence/dune-local-terra-2026-11-15.json) predates persisted mouse actions.
-The [persisted-mouse retest](evidence/persisted-mouse-dune-2026-11-15.json)
+The historical dependent-prototype [persisted-mouse retest](evidence/persisted-mouse-dune-2026-11-15.json)
 verified five accepted actions and three visual transitions with a fresh local
 Terra agent. It records the missed startup budget and distinguishes coordination
 acknowledgments from exact guest pauses or complete player interruptions.

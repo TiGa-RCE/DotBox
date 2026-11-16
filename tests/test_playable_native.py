@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import threading
 import time
+import struct
 
 import pytest
 
@@ -19,7 +20,6 @@ def test_real_game_survives_clients_and_native_ownership_changes(tmp_path):
     executable = os.environ.get("DOTBOX_DOSBOX_EXECUTABLE")
     if not executable:
         pytest.skip("DOTBOX_DOSBOX_EXECUTABLE required for full native play-service acceptance")
-    pytest.importorskip("fdisbull.project")
     Image = pytest.importorskip("PIL.Image")
     source = Path(__file__).resolve().parents[1] / "examples/input_playground.py"
     spec = importlib.util.spec_from_file_location("dotbox_playground_fixture", source)
@@ -97,3 +97,80 @@ def test_real_game_survives_clients_and_native_ownership_changes(tmp_path):
     assert not worker.is_alive() and not failures, failures
     assert not descriptor.exists()
     assert native_processes and all(process.poll() is not None for process in native_processes)
+
+
+def test_default_native_desktop_path_blocks_direct_agent_input(tmp_path):
+    executable = os.environ.get("DOTBOX_DOSBOX_EXECUTABLE")
+    if not executable:
+        pytest.skip("DOTBOX_DOSBOX_EXECUTABLE required for native harness-input acceptance")
+    from dotbox.backend import DOSBoxBackend
+    program = tmp_path / "INPUT.COM"
+    program.write_bytes(bytes.fromhex("b81300cd10ebfe"))
+    backends, errors = [], []
+    ready = threading.Event()
+
+    def factory():
+        backend = DOSBoxBackend({"project": tmp_path / "controls.db", "program": program,
+                                 "game_dir": tmp_path, "executable": executable})
+        backends.append(backend)
+        return backend
+
+    service = PlayService(factory, tmp_path / "session")
+
+    def serve():
+        try:
+            service.run(on_ready=lambda _: ready.set())
+        except BaseException as error:
+            errors.append(error)
+            ready.set()
+
+    worker = threading.Thread(target=serve)
+    worker.start()
+    try:
+        assert ready.wait(10) and not errors, errors
+        client = Client(tmp_path / "session/session.json")
+        lease = client.request("status")["result"]
+        assert lease["owner"] == "harness" and lease["native_owner"] == "host"
+        assert lease["state"] == "running"
+        assert lease["platform_takeover"]["owner"] == "unknown"
+        assert client.request("key", {"key": "right"}, lease=lease)["error"]["code"] == "harness_controls_input"
+        assert client.request("control", {"owner": "agent"}, lease=lease)["error"]["code"] == "takeover_unavailable"
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            frame = client.request("frame")
+            if frame["ok"] and frame["result"]["width"] == 320:
+                assert frame["result"]["height"] == 200
+                break
+            time.sleep(0.02)
+        else:
+            raise AssertionError("No original graphics frame in desktop-input mode")
+        assert client.request("close", lease=lease)["ok"]
+    finally:
+        service.request_stop()
+        worker.join(10)
+    assert not worker.is_alive() and not errors, errors
+    assert not (tmp_path / "session/session.json").exists()
+    assert backends[0]._session.rpc.process.poll() is not None
+
+
+def test_original_mz_entry_and_relocation_with_standalone_runtime(tmp_path):
+    executable = os.environ.get("DOTBOX_DOSBOX_EXECUTABLE")
+    if not executable:
+        pytest.skip("DOTBOX_DOSBOX_EXECUTABLE required for original MZ acceptance")
+    from dotbox.native_session import NativeSession
+    # Authored MZ: VGA initialization, infinite loop, one unused relocated word.
+    code = bytes.fromhex("b81300cd10ebfe0000")
+    header = struct.pack("<14H", 0x5A4D, 32 + len(code), 1, 1, 2,
+                         16, 0xFFFF, 0, 256, 0, 0, 0, 28, 0)
+    program = tmp_path / "TEST.EXE"
+    program.write_bytes(header + struct.pack("<HH", 7, 0) + code)
+    session = NativeSession(executable, tmp_path, program, window=False)
+    try:
+        assert session.metadata["image_format"] == "MZ"
+        assert session.metadata["entry_bytes_verified"] == len(code)
+        assert session.call("session.status")["state"] == "stopped"
+        session.call("execution.continue")
+    finally:
+        session.close()
+    assert session.close_receipt["closed"] is True
+    assert session.rpc.process.poll() == 0

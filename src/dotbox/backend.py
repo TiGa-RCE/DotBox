@@ -1,4 +1,4 @@
-"""Small visible-DOSBox adapter over an explicitly installed fDisBull core.
+"""Standalone visible-DOSBox adapter reusing the extracted native runtime.
 
 The service owns this object on one thread. It never interprets desktop takeover
 state; it only exposes the backend's acknowledged native input ownership.
@@ -21,17 +21,13 @@ class BackendUnavailable(RuntimeError):
     """The selected core or binary cannot provide this playable slice."""
 
 
-def _load_fdisbull():
-    try:
-        from fdisbull.project import Project
-        from fdisbull.keyboard_input import validate_keyboard
-        from fdisbull.screenshot_codecs import decode_screenshot
-        from fdisbull.operation_budget import deadline_scope
-    except (ImportError, OSError) as error:
-        raise BackendUnavailable(
-            'A compatible installed fDisBull core and its dependencies are required'
-        ) from error
-    return Project, validate_keyboard, decode_screenshot, deadline_scope
+def _load_runtime():
+    from .store import ControlStore
+    from .native_session import NativeSession
+    from .keyboard_input import validate_keyboard
+    from .screenshot_codecs import decode_screenshot
+    from .operation_budget import deadline_scope
+    return ControlStore, NativeSession, validate_keyboard, decode_screenshot, deadline_scope
 
 
 def _integer(value, name, low=0, high=_MAX_INTEGER):
@@ -66,8 +62,8 @@ def _stop_metadata(result):
     return result
 
 
-class FDisBullBackend:
-    """Own one visible original-game session without copying the debugger core."""
+class DOSBoxBackend:
+    """Own one visible original-game session through the extracted DOSBox transport."""
 
     def __init__(self, config):
         self._thread = threading.get_ident()
@@ -97,19 +93,27 @@ class FDisBullBackend:
         if not project_path.exists() and program is None:
             raise ValueError('program is required to create a missing analysis project')
 
-        Project, self._validate_keyboard, self._decode_screenshot, self._deadline_scope = _load_fdisbull()
+        Store, NativeSession, self._validate_keyboard, self._decode_screenshot, self._deadline_scope = _load_runtime()
         try:
             if project_path.exists():
-                self._project = Project(project_path)
+                self._project = Store(project_path)
                 if program is not None:
                     if (self._project.meta['filename'] != program.name
                             or self._project.meta['source_sha256'] != hashlib.sha256(program.read_bytes()).hexdigest()):
                         raise ValueError('program does not match the existing project source')
             else:
-                options = {} if image is None else {'image': image}
-                self._project = Project.create(project_path, program, **options)
-            self._session = self._project.debugger(
-                executable, game_dir, backend='dosbox', window=True, version=1)
+                self._project = Store(project_path, program=program)
+            selected_program = (game_dir / self._project.meta['filename']).resolve(strict=True)
+            if selected_program.parent != game_dir:
+                raise ValueError('Stored program must be directly inside game_dir')
+            if image not in (None, 'auto'):
+                with selected_program.open('rb') as source:
+                    actual_image = 'mz' if source.read(2) == b'MZ' else 'com'
+                if actual_image != image:
+                    raise ValueError('Declared image format does not match the original program')
+            self._session = NativeSession(
+                executable, game_dir, selected_program, window=True,
+                source_sha256=self._project.meta['source_sha256'])
             capabilities = self._session.rpc.capabilities
             if capabilities.get('input', {}).get('cooperative_control') != COOPERATIVE_CONTROL:
                 raise BackendUnavailable(
@@ -169,6 +173,24 @@ class FDisBullBackend:
         if current.get('state') != 'stopped':
             raise ValueError('Cannot play an exited or unavailable guest')
         return self._continue()
+
+    def resume_after_handoff(self, owner, generation):
+        """Reobserve the owned startup/pause boundary before automatic resume.
+
+        The service is the sole native controller. Execution RPCs themselves do
+        not carry an atomic ownership guard; no foreign stop is adopted here.
+        """
+        if owner not in ('host', 'agent'):
+            raise ValueError('Invalid resume owner')
+        _integer(generation, 'generation')
+        observed = self.status()
+        if observed['native_control'] != {'owner': owner, 'generation': generation}:
+            raise ValueError('Ownership changed before handoff resume')
+        reason = observed.get('stop_reason') or {}
+        kind = reason.get('kind') if isinstance(reason, dict) else reason
+        if observed['state'] == 'stopped' and kind in ('startup', 'pause'):
+            return self._continue()
+        return observed
 
     def _continue(self):
         result = self._call('execution.continue')
@@ -419,3 +441,7 @@ class FDisBullBackend:
                     failure = error
         if failure is not None:
             raise failure
+
+
+# Compatibility for callers of the dependent prototype; this class imports no fDisBull.
+FDisBullBackend = DOSBoxBackend

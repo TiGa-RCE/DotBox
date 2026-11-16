@@ -73,26 +73,22 @@ def adapter(tmp_path, monkeypatch):
     session = Session()
     projects = []
 
-    class Project:
-        def __init__(self, path):
+    class Store:
+        def __init__(self, path, program=None):
             self.path = path
             self.closed = False
             self.meta = {'filename': 'GAME.EXE', 'source_sha256': hashlib.sha256(b'game').hexdigest()}
             projects.append(self)
-
-        @classmethod
-        def create(cls, path, program, **options):
-            path.touch()
-            project = cls(path)
-            project.created = (program, options)
-            return project
-
-        def debugger(self, executable, game_dir, **options):
-            self.launch = (executable, game_dir, options)
-            return session
+            if program is not None:
+                path.touch()
+                self.created = program
 
         def __exit__(self, *args):
             self.closed = True
+
+    def native_session(executable, game_dir, program, **options):
+        projects[-1].launch = (executable, game_dir, program, options)
+        return session
 
     def validate_keyboard(**params):
         if 'text' in params:
@@ -106,8 +102,8 @@ def adapter(tmp_path, monkeypatch):
         assert raw == PNG
         return raw, {key: value for key, value in reply.items() if key != 'png_base64'}
 
-    monkeypatch.setattr(backend, '_load_fdisbull', lambda: (
-        Project, validate_keyboard, decode_screenshot, lambda *args, **kwargs: nullcontext()))
+    monkeypatch.setattr(backend, '_load_runtime', lambda: (
+        Store, native_session, validate_keyboard, decode_screenshot, lambda *args, **kwargs: nullcontext()))
     game_dir = tmp_path / 'game'
     game_dir.mkdir()
     program = game_dir / 'GAME.EXE'
@@ -124,7 +120,8 @@ def test_visible_original_backend_reused_and_control_query_has_no_effect(adapter
     config, native, projects = adapter
     b = backend.FDisBullBackend(config)
     try:
-        assert projects[0].launch[2] == {'backend': 'dosbox', 'window': True, 'version': 1}
+        assert projects[0].launch[3] == {'window': True, 'source_sha256': hashlib.sha256(b'game').hexdigest()}
+        assert projects[0].launch[2].name == 'GAME.EXE'
         first, second = b.status(), b.status()
         assert first == second
         assert first['run_id'] == 'retained-run'
@@ -141,6 +138,15 @@ def test_spectator_only_binary_refused_and_owned_resources_closed(adapter):
     with pytest.raises(backend.BackendUnavailable, match='cooperative'):
         backend.FDisBullBackend(config)
     assert native.closed and projects[0].closed
+
+
+def test_explicit_image_format_mismatch_refused_before_native_launch(adapter):
+    config, native, stores = adapter
+    config['image'] = 'mz'
+    with pytest.raises(ValueError, match='image format'):
+        backend.DOSBoxBackend(config)
+    assert stores[0].closed and not hasattr(stores[0], 'launch')
+    assert not native.calls
 
 
 def test_transfer_is_native_atomic_and_stale_input_never_dispatched(adapter):
@@ -162,6 +168,33 @@ def test_transfer_is_native_atomic_and_stale_input_never_dispatched(adapter):
         assert native.calls[-1] == ('input.keyboard.press', {
             'key': 'enter', 'modifiers': 'ctrl', 'hold_ms': 40, 'gap_ms': 40,
             'control_generation': 2})
+    finally:
+        b.close()
+
+
+@pytest.mark.parametrize('change', ['breakpoint', 'generation'])
+def test_handoff_resume_reobserves_stop_and_ownership(adapter, monkeypatch, change):
+    config, native, _ = adapter
+    b = backend.DOSBoxBackend(config)
+    b.transfer('host', 0)
+    original = native.call
+
+    def changed(method, params=None):
+        if method == 'session.status':
+            if change == 'breakpoint':
+                native.last_stop = {'kind': 'breakpoint'}
+            else:
+                native.generation += 1
+        return original(method, params)
+
+    monkeypatch.setattr(native, 'call', changed)
+    try:
+        if change == 'generation':
+            with pytest.raises(ValueError, match='Ownership changed'):
+                b.resume_after_handoff('host', 1)
+        else:
+            assert b.resume_after_handoff('host', 1)['stop_reason']['kind'] == 'breakpoint'
+        assert not any(method == 'execution.continue' for method, _ in native.calls)
     finally:
         b.close()
 
@@ -404,7 +437,7 @@ def test_exited_guest_is_not_automatically_restarted(adapter):
 def test_missing_project_requires_explicit_program_before_dependency_loading(adapter, monkeypatch):
     config, _, projects = adapter
     config.pop('program')
-    monkeypatch.setattr(backend, '_load_fdisbull', lambda: pytest.fail('must not load core'))
+    monkeypatch.setattr(backend, '_load_runtime', lambda: pytest.fail('must not load runtime'))
     with pytest.raises(ValueError, match='program'):
         backend.FDisBullBackend(config)
     assert not projects

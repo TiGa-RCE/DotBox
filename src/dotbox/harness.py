@@ -1,13 +1,19 @@
-"""Small immutable control vocabularies in the existing Project database.
+"""Small immutable control vocabularies in an independent DotBox control store.
 
 Every use selects an immutable revision explicitly. There is no implicit latest
 revision, executable plugin, automatic discovery, or certified game outcome.
+The manifest layout/ID scheme is adapted from fDisBull input_macros.py at
+ce91c303f2fccd1db9b1e3917ecc8c98473bfdb9, with no runtime import of fDisBull.
 """
 
 from copy import deepcopy
+from datetime import datetime, timezone
 import hashlib
 import json
 import re
+
+from .input_macros import expand_macro, identifier, validate_macro_set
+from .keyboard_input import validate_keyboard as _validate_keyboard
 
 
 MAX_CONTROLS = 32
@@ -60,9 +66,8 @@ def _revision(value):
 
 class HarnessLibrary:
     def __init__(self, project, *, version=1, validate_keyboard=None):
-        from fdisbull.input_macros import expand_macro, validate_macro_set
         if validate_keyboard is None:
-            from fdisbull.keyboard_input import validate_keyboard
+            validate_keyboard = _validate_keyboard
         self.project = project
         self.version = version
         self.validate_keyboard = validate_keyboard
@@ -127,7 +132,6 @@ class HarnessLibrary:
         if not isinstance(definition, dict):
             raise ValueError("Expected a control vocabulary object")
         if definition.get("format") == CONTROL_FORMAT:
-            from fdisbull.input_macros import identifier
             if set(definition) - {"format", "name", "controls", "provenance"}:
                 raise ValueError("Unsupported control vocabulary fields")
             identifier(definition.get("name"))
@@ -157,7 +161,7 @@ class HarnessLibrary:
             "parent": info["parent"], "binding": info["binding"],
             "controls": sorted(_controls(info["definition"])),
             "claim": "Authored controls; input delivery is not verified game progress",
-            "binding_scope": "executable and mapped bytes; game resources not inventoried",
+            "binding_scope": "original executable bytes; game resources not inventoried",
         }
 
     def save(self, definition, *, parent=None):
@@ -166,24 +170,19 @@ class HarnessLibrary:
             previous = self.info(_revision(parent))
             if previous["definition"]["name"] != doc["name"]:
                 raise ValueError("Parent must belong to the same control vocabulary")
-        # Preserve legacy records, including their IDs and the core's format.
-        # A legacy-format child of a DotBox revision uses our table because the
-        # core's parent foreign key only addresses its own macro table.
-        if doc["format"] != CONTROL_FORMAT and (parent is None or self._row(parent) is None):
-            info = self.project.debug_define_macros(
-                doc, version=self.version, author="dotbox", parent=parent)
-        else:
-            from fdisbull.project import now
-            with self.project.transaction(True):
-                binding = self._binding()
-                document = {"definition": doc, "binding": binding, "author": "dotbox", "parent": parent}
-                encoded = _encode(document)
-                revision = hashlib.sha256(encoded.encode()).hexdigest()
-                self.project.db.execute(_DDL)
-                self.project.db.execute(
-                    "INSERT OR IGNORE INTO dotbox_control_sets VALUES (?,?,?,?,?,?,?)",
-                    (revision, binding["version"], parent, now(), "dotbox", revision, encoded))
-                info = self.info(revision)
+        # Keep the legacy definition format and immutable manifest ID scheme.
+        # Both formats now use the same standalone metadata table.
+        with self.project.transaction(True):
+            binding = self._binding()
+            document = {"definition": doc, "binding": binding, "author": "dotbox", "parent": parent}
+            encoded = _encode(document)
+            revision = hashlib.sha256(encoded.encode()).hexdigest()
+            self.project.db.execute(_DDL)
+            self.project.db.execute(
+                "INSERT OR IGNORE INTO dotbox_control_sets VALUES (?,?,?,?,?,?,?)",
+                (revision, binding["version"], parent, datetime.now(timezone.utc).isoformat(),
+                 "dotbox", revision, encoded))
+            info = self.info(revision)
         return {**self._summary(info), "id": info["id"]}
 
     def _binding(self):
@@ -205,7 +204,7 @@ class HarnessLibrary:
         revision = _revision(revision)
         row = self._row(revision)
         if row is None:
-            info = self.project.debug_macro_info(revision, version=self.version)
+            raise ValueError("Unknown control revision for selected source version")
         else:
             encoded = row["document"]
             if not isinstance(encoded, str) or len(encoded.encode()) > MAX_DEFINITION_BYTES + 2048:
@@ -234,10 +233,10 @@ class HarnessLibrary:
         return {**info, **self._summary(info)}
 
     def list(self):
-        # Both stores are immutable Project metadata. No selected/latest head.
-        infos = self.project.debug_macro_sets(version=self.version)["macro_sets"]
+        # Immutable store metadata only; there is no selected/latest head.
+        version = self.project.version(self.version)["id"]
+        infos = []
         if self._has_controls():
-            version = self.project.version(self.version)["id"]
             infos += [self.info(row["id"]) for row in self.project.db.execute(
                 "SELECT id FROM dotbox_control_sets WHERE version=? ORDER BY rowid", (version,))]
         infos.sort(key=lambda info: info["created"])

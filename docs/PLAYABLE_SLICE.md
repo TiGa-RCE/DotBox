@@ -1,3 +1,6 @@
+> Historical dependent-prototype instructions. For the current standalone cut,
+> use [STANDALONE.md](STANDALONE.md); no fDisBull environment is required.
+
 # First playable development slice
 
 This slice owns one visible original DOSBox-X game across client connections.

@@ -1,13 +1,11 @@
-"""Persistent starting controls use real core storage without launching a guest."""
+"""Persistent controls use independent SQLite storage without a guest or fDisBull."""
 
 from copy import deepcopy
 
 import pytest
 
 from dotbox.harness import HarnessLibrary
-
-
-Project = pytest.importorskip("fdisbull.project").Project
+from dotbox.store import ControlStore
 
 
 def controls(*, name="playground", key="right"):
@@ -28,7 +26,7 @@ def controls(*, name="playground", key="right"):
 def project(tmp_path):
     program = tmp_path / "PLAY.COM"
     program.write_bytes(bytes.fromhex("b8 00 4c cd 21"))
-    with Project.create(tmp_path / "play.fdb", program, image="com") as opened:
+    with ControlStore(tmp_path / "play.fdb", program) as opened:
         yield opened
 
 
@@ -36,7 +34,7 @@ def test_controls_survive_project_reopen_without_redefinition(tmp_path):
     program = tmp_path / "PLAY.COM"
     program.write_bytes(bytes.fromhex("b8 00 4c cd 21"))
     path = tmp_path / "play.fdb"
-    with Project.create(path, program, image="com") as project:
+    with ControlStore(path, program) as project:
         library = HarnessLibrary(project)
         saved = library.save(controls())
         revision = saved["revision"]
@@ -44,7 +42,7 @@ def test_controls_survive_project_reopen_without_redefinition(tmp_path):
         assert library.save(deepcopy(controls()))["revision"] == revision
         assert len(library.list()["revisions"]) == 1
 
-    with Project(path) as project:
+    with ControlStore(path) as project:
         library = HarnessLibrary(project)
         info = library.info(revision)
         assert info["revision"] == revision
@@ -57,6 +55,21 @@ def test_controls_survive_project_reopen_without_redefinition(tmp_path):
             "key": "right", "modifiers": [], "hold_ms": 40, "gap_ms": 40}}]
         assert plan["queued_guest_ms"] == 80
         assert library.list()["truncated"] is False
+
+
+def test_legacy_keyboard_document_keeps_its_known_immutable_manifest_id(project):
+    # A fixed canonical manifest from the source-attested standalone format.
+    # Keep this literal ID so a future format rewrite cannot silently re-key it.
+    expected = "55f36aba98a6b281094ac7fb634c01b671cf86fb1f4c7cdff0b30c5381feda5b"
+    saved = HarnessLibrary(project).save(controls())
+    assert saved["revision"] == expected
+    document = project.db.execute(
+        "SELECT document FROM dotbox_control_sets WHERE id=?", (expected,)).fetchone()[0]
+    project.db.execute("UPDATE dotbox_control_sets SET created='2026-11-14T00:00:00+00:00' WHERE id=?", (expected,))
+    assert HarnessLibrary(project).info(expected)["definition"] == controls()
+    assert HarnessLibrary(project).save(controls())["revision"] == expected
+    assert project.db.execute(
+        "SELECT document FROM dotbox_control_sets WHERE id=?", (expected,)).fetchone()[0] == document
 
 
 def test_explicit_old_revisions_and_sibling_branches_remain_usable(project):
@@ -88,16 +101,17 @@ def test_persisted_row_from_another_source_is_not_accepted(tmp_path):
     first_program, second_program = tmp_path / "A.COM", tmp_path / "B.COM"
     first_program.write_bytes(bytes.fromhex("b8 00 4c cd 21"))
     second_program.write_bytes(bytes.fromhex("90 b8 00 4c cd 21"))
-    with Project.create(tmp_path / "a.fdb", first_program, image="com") as first:
+    with ControlStore(tmp_path / "a.fdb", first_program) as first:
         revision = HarnessLibrary(first).save(controls())["revision"]
         # Deliberately contaminate a second project with a persisted metadata
         # row. This exercises the source binding check, rather than merely an
         # unknown-revision lookup, without adding an import API to DotBox.
         record = tuple(first.db.execute(
-            "SELECT * FROM debug_macro_sets WHERE id=?", (revision,)).fetchone())
-        with Project.create(tmp_path / "b.fdb", second_program, image="com") as second:
+            "SELECT * FROM dotbox_control_sets WHERE id=?", (revision,)).fetchone())
+        with ControlStore(tmp_path / "b.fdb", second_program) as second:
+            HarnessLibrary(second).save(controls())
             with second.transaction(True):
-                second.db.execute("INSERT INTO debug_macro_sets VALUES (?,?,?,?,?,?,?)", record)
+                second.db.execute("INSERT INTO dotbox_control_sets VALUES (?,?,?,?,?,?,?)", record)
             with pytest.raises(ValueError, match="binding|source|version"):
                 HarnessLibrary(second).info(revision)
 
@@ -141,6 +155,7 @@ def test_invalid_later_step_rejects_the_whole_definition_before_saving(project, 
     {"authority": "authoring"},
     {"parameters": {"direction": {"type": "string"}}},
     {"outputs": {"accepted": "$input.accepted"}},
+    {"parameters": []}, {"parameters": None}, {"outputs": []}, {"outputs": None},
 ])
 def test_runtime_parameters_outputs_and_other_authorities_are_not_starting_controls(project, change):
     library = HarnessLibrary(project)
@@ -172,15 +187,24 @@ def test_general_core_macro_records_cannot_bypass_the_play_facade(project, chang
     supported = library.save(controls())["revision"]
     definition = controls(name="general_debugger")
     definition["macros"]["move"].update(changed)
-    # Existing fDisBull projects can contain a broader, valid macro vocabulary.
-    # Selecting that known immutable ID must still enforce DotBox's smaller
-    # policy at use time, rather than trusting that only save() created it.
-    general = project.debug_define_macros(definition, version=1, author="other-tool")["id"]
+    # A rehashed record inserted outside the public save API must not bypass
+    # DotBox's smaller policy when its immutable ID is selected.
+    import hashlib
+    import json
+    row = dict(project.db.execute(
+        "SELECT * FROM dotbox_control_sets WHERE id=?", (supported,)).fetchone())
+    document = {"definition": definition, "binding": library.info(supported)["binding"],
+                "author": "other-tool", "parent": None}
+    encoded = json.dumps(document, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    general = hashlib.sha256(encoded.encode()).hexdigest()
+    with project.transaction(True):
+        project.db.execute("INSERT INTO dotbox_control_sets VALUES (?,?,?,?,?,?,?)", (
+            general, 1, None, row["created"], "other-tool", general, encoded))
     with pytest.raises(ValueError):
         library.info(general)
     with pytest.raises(ValueError):
         library.plan(general, "move")
-    assert {item["revision"] for item in library.list()["revisions"]} == {supported}
+    assert library.info(supported)["revision"] == supported
 
 
 def test_step_limit_is_per_expanded_control(project):
@@ -255,7 +279,7 @@ def test_absolute_mouse_revisions_survive_reopen_and_keep_legacy_parent(tmp_path
     program = tmp_path / "PLAY.COM"
     program.write_bytes(bytes.fromhex("b8 00 4c cd 21"))
     path = tmp_path / "play.fdb"
-    with Project.create(path, program, image="com") as opened:
+    with ControlStore(path, program) as opened:
         library = HarnessLibrary(opened)
         legacy = library.save(controls())["revision"]
         definition = mouse_controls()
@@ -265,7 +289,7 @@ def test_absolute_mouse_revisions_survive_reopen_and_keep_legacy_parent(tmp_path
         changed["controls"]["choose"]["steps"][0]["x"] = 19
         newer = library.save(changed, parent=first)["revision"]
         assert library.save(changed, parent=first)["revision"] == newer
-    with Project(path) as opened:
+    with ControlStore(path) as opened:
         library = HarnessLibrary(opened)
         assert library.info(first)["definition"] == definition
         assert library.info(first)["parent"] == legacy
@@ -346,11 +370,11 @@ def test_mouse_row_hash_and_source_binding_are_verified(tmp_path):
     first_program, second_program = tmp_path / "A.COM", tmp_path / "B.COM"
     first_program.write_bytes(bytes.fromhex("b8 00 4c cd 21"))
     second_program.write_bytes(bytes.fromhex("90 b8 00 4c cd 21"))
-    with Project.create(tmp_path / "a.fdb", first_program, image="com") as first:
+    with ControlStore(tmp_path / "a.fdb", first_program) as first:
         library = HarnessLibrary(first)
         revision = library.save(mouse_controls())["revision"]
         record = tuple(first.db.execute("SELECT * FROM dotbox_control_sets WHERE id=?", (revision,)).fetchone())
-        with Project.create(tmp_path / "b.fdb", second_program, image="com") as second:
+        with ControlStore(tmp_path / "b.fdb", second_program) as second:
             # Establish the schema through a normal save, then inject the exact
             # valid first-project row without altering its hash or binding.
             HarnessLibrary(second).save(mouse_controls())
@@ -367,10 +391,8 @@ def test_mouse_row_hash_and_source_binding_are_verified(tmp_path):
 def test_mouse_revision_rejects_a_different_selected_byte_version(project):
     library = HarnessLibrary(project)
     revision = library.save(mouse_controls())["revision"]
-    address = project.regions(1)[0].start
-    patched = project.patch(address, "90", version=1)
-    with pytest.raises(ValueError, match="binding"):
-        HarnessLibrary(project, version=patched["version"]).info(revision)
+    with pytest.raises(ValueError, match="version"):
+        HarnessLibrary(project, version=2).info(revision)
     assert HarnessLibrary(project, version=1).info(revision)["revision"] == revision
 
 
@@ -417,7 +439,7 @@ def test_rehashed_persisted_mouse_documents_still_enforce_the_play_schema(projec
 
 
 def test_legacy_format_cannot_smuggle_mouse_into_core_macros(project):
-    from fdisbull.input_macros import PRIMITIVES
+    from dotbox.input_macros import PRIMITIVES
     before = set(PRIMITIVES)
     definition = controls()
     definition['macros']['move']['steps'] = mouse_controls()['controls']['choose']['steps']

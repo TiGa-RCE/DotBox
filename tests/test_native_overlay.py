@@ -98,60 +98,64 @@ def test_pinned_overlay_applies_and_repeats_without_mutation(tmp_path):
     assert after == {name: (tmp_path / name).read_bytes() for name in after}
 
 
-def _native_project(tmp_path):
+def _native_session(tmp_path):
     executable = os.environ.get('DOTBOX_DOSBOX_EXECUTABLE')
     if not executable:
         pytest.skip('DOTBOX_DOSBOX_EXECUTABLE required for real native protocol checks')
-    Project = pytest.importorskip('fdisbull.project').Project
+    from dotbox.native_session import NativeSession
     program = tmp_path / 'INPUT.COM'
     # Authored fixture: select mode 13h, then loop with interrupts enabled.
     program.write_bytes(bytes.fromhex('b81300cd10ebfe'))
-    return executable, Project.create(tmp_path / 'input.fdb', program, image='com')
+    return lambda **kwargs: NativeSession(executable, tmp_path, program, **kwargs)
 
 
 def test_native_headless_refuses_host_owner_without_mutation(tmp_path):
-    executable, project = _native_project(tmp_path)
-    with project:
-        with project.debugger(executable, tmp_path, version=1) as debug:
-            assert debug.rpc.capabilities['input']['cooperative_control'] == 'dotbox-input-control-1'
-            initial = debug.call('input.control')
-            assert (initial['owner'], initial['generation']) == ('agent', 0)
-            with pytest.raises(ValueError, match='visible agent window'):
-                debug.call('input.control', {'owner': 'host', 'expected_generation': 0})
-            after = debug.call('input.control')
-            assert (after['owner'], after['generation']) == ('agent', 0)
-            with pytest.raises(ValueError):
-                debug.call('input.keyboard.frame_edges', {'edges': [], 'control_generation': 'invalid'})
-        assert debug.rpc.process.poll() is not None
+    session = _native_session(tmp_path)
+    debug = session(window=False)
+    try:
+        assert debug.rpc.capabilities['input']['cooperative_control'] == 'dotbox-input-control-1'
+        initial = debug.call('input.control')
+        assert (initial['owner'], initial['generation']) == ('agent', 0)
+        with pytest.raises(ValueError, match='visible agent window'):
+            debug.call('input.control', {'owner': 'host', 'expected_generation': 0})
+        after = debug.call('input.control')
+        assert (after['owner'], after['generation']) == ('agent', 0)
+        with pytest.raises(ValueError):
+            debug.call('input.keyboard.frame_edges', {'edges': [], 'control_generation': 'invalid'})
+    finally:
+        debug.close()
+    assert debug.rpc.process.poll() is not None
 
 
 def test_native_visible_owner_transfers_reset_and_reject_stale_inputs(tmp_path, monkeypatch):
-    executable, project = _native_project(tmp_path)
+    session = _native_session(tmp_path)
     monkeypatch.delenv('SDL_VIDEODRIVER', raising=False)
-    with project:
-        with project.debugger(executable, tmp_path, version=1, window=True) as debug:
-            debug.call('input.keyboard.press', {'key': 'a', 'hold_ms': 500, 'control_generation': 0})
-            before = debug.call('input.keyboard.state')['keyboard']
-            assert before['pending_events'] > 0
-            host = debug.call('input.control', {'owner': 'host', 'expected_generation': 0})
-            assert (host['owner'], host['generation'], host['input_reset']) == ('host', 1, True)
-            keyboard = debug.call('input.keyboard.state')['keyboard']
-            assert keyboard['pending_events'] == 0 and keyboard['owned_keys'] == 0
-            for params in ({'key': 'a'}, {'key': 'a', 'control_generation': 1}):
-                with pytest.raises(ValueError, match='owned by the host'):
-                    debug.call('input.keyboard.press', params)
+    debug = session(window=True)
+    try:
+        debug.call('input.keyboard.press', {'key': 'a', 'hold_ms': 500, 'control_generation': 0})
+        before = debug.call('input.keyboard.state')['keyboard']
+        assert before['pending_events'] > 0
+        host = debug.call('input.control', {'owner': 'host', 'expected_generation': 0})
+        assert (host['owner'], host['generation'], host['input_reset']) == ('host', 1, True)
+        keyboard = debug.call('input.keyboard.state')['keyboard']
+        assert keyboard['pending_events'] == 0 and keyboard['owned_keys'] == 0
+        for params in ({'key': 'a'}, {'key': 'a', 'control_generation': 1}):
             with pytest.raises(ValueError, match='owned by the host'):
-                debug.call('input.mouse.button', {'button': 'left', 'pressed': True, 'control_generation': 1})
-            with pytest.raises(ValueError, match='generation changed'):
-                debug.call('input.control', {'owner': 'agent', 'expected_generation': 0})
-            agent = debug.call('input.control', {'owner': 'agent', 'expected_generation': 1})
-            assert (agent['owner'], agent['generation']) == ('agent', 2)
-            with pytest.raises(ValueError, match='generation changed'):
-                debug.call('input.keyboard.press', {'key': 'a', 'control_generation': 0})
-            debug.call('input.keyboard.press', {'key': 'a', 'control_generation': 2})
-            # Reconcile queued agent input before closing the fixture.
-            reset = debug.call('input.control', {'owner': 'agent', 'expected_generation': 2})
-            assert reset['generation'] == 3
-            keyboard = debug.call('input.keyboard.state')['keyboard']
-            assert keyboard['pending_events'] == 0 and keyboard['owned_keys'] == 0
-        assert debug.rpc.process.poll() is not None
+                debug.call('input.keyboard.press', params)
+        with pytest.raises(ValueError, match='owned by the host'):
+            debug.call('input.mouse.button', {'button': 'left', 'pressed': True, 'control_generation': 1})
+        with pytest.raises(ValueError, match='generation changed'):
+            debug.call('input.control', {'owner': 'agent', 'expected_generation': 0})
+        agent = debug.call('input.control', {'owner': 'agent', 'expected_generation': 1})
+        assert (agent['owner'], agent['generation']) == ('agent', 2)
+        with pytest.raises(ValueError, match='generation changed'):
+            debug.call('input.keyboard.press', {'key': 'a', 'control_generation': 0})
+        debug.call('input.keyboard.press', {'key': 'a', 'control_generation': 2})
+        # Reconcile queued agent input before closing the fixture.
+        reset = debug.call('input.control', {'owner': 'agent', 'expected_generation': 2})
+        assert reset['generation'] == 3
+        keyboard = debug.call('input.keyboard.state')['keyboard']
+        assert keyboard['pending_events'] == 0 and keyboard['owned_keys'] == 0
+    finally:
+        debug.close()
+    assert debug.rpc.process.poll() is not None

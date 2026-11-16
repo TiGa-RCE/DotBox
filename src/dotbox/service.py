@@ -95,8 +95,9 @@ def session_lock(directory):
 class PlayService:
     """Create and use backend/SQLite objects only inside run()'s owner thread.
 
-    Desktop takeover is not inferred. Until a supported platform provider is
-    attached, explicit control changes require manual_control=True at startup.
+    Default input passes through the outer desktop harness. Direct RPC input
+    is disabled there. Explicit native transfers require manual_control=True;
+    they do not claim to observe the outer WebRTC owner.
     A socket disconnect never ends the game. The owner stops on an explicit
     close, a stop request, or an unrecoverable backend failure.
     """
@@ -131,7 +132,7 @@ class PlayService:
         if self.generation is not None and generation != self.generation:
             self.owner = "unclaimed"
         self.generation = generation
-        expected = {"agent": "agent", "human": "host"}.get(self.owner)
+        expected = {"agent": "agent", "human": "host", "harness": "host"}.get(self.owner)
         if expected is not None and control["owner"] != expected:
             self.owner = "unclaimed"
         return {
@@ -143,7 +144,8 @@ class PlayService:
             "owner": self.owner,
             "generation": generation,
             "native_owner": control["owner"],
-            "control_source": "manual" if self.owner in ("agent", "human") else "unavailable",
+            "control_source": ("desktop-input-path" if self.owner == "harness" else
+                               "manual" if self.owner in ("agent", "human") else "unavailable"),
             "platform_takeover": {"owner": "unknown", "source": "unavailable"},
             "manual_control_enabled": self.manual_control,
         }
@@ -182,6 +184,8 @@ class PlayService:
         if op == "close":
             self.stop_requested.set()
             return {"status": "closing"}
+        if not self.manual_control and op in {"play", "pause", "key", "type", "click", "act"}:
+            raise ProtocolError("harness_controls_input", "Use the desktop harness input path; direct agent input/play/pause is disabled in harness-controlled mode.")
         if op == "pause":
             return self.backend.pause()
         if op == "control":
@@ -191,7 +195,7 @@ class PlayService:
             if type(resume) is not bool:
                 raise ProtocolError("invalid_params", "resume must be boolean.")
             if not self.manual_control:
-                raise ProtocolError("takeover_unavailable", "No platform takeover provider is attached; explicit testing requires --manual-control.")
+                raise ProtocolError("takeover_unavailable", "Native handoff requires --manual-control; the outer desktop harness owns its own takeover flow.")
             native_owner = "host" if params["owner"] == "human" else "agent"
             previous = self.generation
             result = self.backend.transfer(native_owner, previous)
@@ -208,7 +212,7 @@ class PlayService:
             # A breakpoint/exit winning the race must remain visible. Explicit
             # play can continue later; a handoff must not silently erase it.
             if resume and after["state"] == "stopped" and kind in ("pause", "startup"):
-                result = {**result, "execution": self.backend.play()}
+                result = {**result, "execution": self.backend.resume_after_handoff(native_owner, self.generation)}
             return result
         if self.owner == "unclaimed":
             raise ProtocolError("ownership_unclaimed", "Establish ownership before playing.")
@@ -253,9 +257,25 @@ class PlayService:
         with session_lock(directory):
             self._run_owned(directory, on_ready=on_ready)
 
+    def _start_harness_input(self):
+        """Admit ordinary desktop input without pretending to read its owner."""
+        initial = self.snapshot()
+        previous = initial["generation"]
+        result = self.backend.transfer("host", previous)
+        if result != {"owner": "host", "generation": previous + 1}:
+            raise RuntimeError("Backend did not acknowledge desktop input ownership")
+        self.owner, self.generation = "harness", result["generation"]
+        after = self.snapshot()
+        if after["owner"] != "harness" or after["native_owner"] != "host":
+            raise RuntimeError("Desktop input ownership changed during startup")
+        reason = after.get("stop_reason") or {}
+        kind = reason.get("kind") if isinstance(reason, dict) else reason
+        if after["state"] == "stopped" and kind in ("startup", "pause"):
+            self.backend.resume_after_handoff("host", self.generation)
+
     def _run_owned(self, directory, *, on_ready=None):
         if self.credential_factory is None:
-            from fdisbull.local_auth import LocalCredential
+            from .local_auth import LocalCredential
             self.credential_factory = lambda: LocalCredential("dotbox-session-")
         descriptor_path = directory / "session.json"
         if descriptor_path.exists() or descriptor_path.is_symlink():
@@ -263,6 +283,8 @@ class PlayService:
         published = False
         try:
             self.backend = self.backend_factory()
+            if not self.manual_control:
+                self._start_harness_input()
             initial = self.snapshot()
             with self.credential_factory() as credential:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:

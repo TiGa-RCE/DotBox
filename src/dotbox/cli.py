@@ -52,7 +52,7 @@ def parser():
     serve.add_argument("--game-dir", required=True)
     serve.add_argument("--executable", required=True, help="Prepared DOSBox-X with DotBox ownership extension.")
     serve.add_argument("--image", choices=("com", "mz"))
-    serve.add_argument("--manual-control", action="store_true", help="Enable explicit handoff for testing; does not read built-in desktop takeover.")
+    serve.add_argument("--manual-control", action="store_true", help="Diagnostic native handoff/RPC input instead of default desktop-harness input; does not read WebRTC ownership.")
     for name in ("status", "frame", "control", "play", "pause", "key", "type", "click", "close",
                  "harness-list", "harness-info", "harness-save", "act"):
         command = commands.add_parser(name)
@@ -94,9 +94,9 @@ def main(argv=None):
     args = parser().parse_args(argv)
     try:
         if args.command == "serve":
-            from .backend import FDisBullBackend
+            from .backend import DOSBoxBackend
             config = {name: getattr(args, name) for name in ("project", "program", "game_dir", "executable", "image")}
-            service = PlayService(lambda: FDisBullBackend(config), args.directory, manual_control=args.manual_control)
+            service = PlayService(lambda: DOSBoxBackend(config), args.directory, manual_control=args.manual_control)
             previous = {sig: signal.signal(sig, lambda *_: service.request_stop())
                         for sig in (signal.SIGINT, signal.SIGTERM)}
             try:

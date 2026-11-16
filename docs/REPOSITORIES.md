@@ -27,8 +27,10 @@ this bootstrap. Future publication needs to update both repositories explicitly.
 The release portal is the planned binary-package delivery venue; source mirroring
 and package publication are separate operations.
 
-The Python service reuses an explicitly prepared fDisBull core through its API;
-it does not vendor that core. The native ownership overlay contains modified
+The standalone Python service contains the extracted runtime subset and does
+not require fDisBull at runtime. Native source preparation is owned by DotBox;
+its pinned base and ownership overlay retain their upstream provenance.
+The native ownership overlay contains modified
 DOSBox-X source under GPL-2.0-or-later, as recorded in `native/README.md`.
 Preserve the upstream notices and corresponding source when distributing an
 emulator binary. This source contribution includes no native binary or game data.

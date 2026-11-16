@@ -1,7 +1,7 @@
 # DOSBox-X cooperative-input overlay
 
-`input-control.patch` adds an opt-in input owner to the existing fDisBull
-DOSBox-X agent. The default remains an agent-owned spectator window. Standard
+`input-control.patch` adds an opt-in input owner to DotBox's pinned DOSBox-X
+agent. The default remains an agent-owned spectator window. Standard
 DOSBox-X host keyboard/mouse processing is enabled only after an explicit
 transfer to `host`.
 
@@ -9,18 +9,19 @@ The exact upstream commit, prepared fDisBull stable-patch identity, touched base
 file hashes, overlay hash and expected result hashes are in `manifest.json`.
 This overlay targets `experimental/dosbox-x`, not the separate layers profile.
 
-Prepare the pinned upstream with the corresponding fDisBull stable patch and
-verify that base against its source manifest. Then run:
+The complete base patch, source manifest and license text are included under
+`dosbox-x/`. Prepare both native patches without an fDisBull checkout:
 
 ```sh
-python native/apply_overlay.py /path/to/prepared/dosbox-x --check
-python native/apply_overlay.py /path/to/prepared/dosbox-x
+python scripts/prepare_native.py /path/to/new/dosbox-x
+python scripts/prepare_native.py /path/to/new/dosbox-x --check
 ```
 
-The applicator verifies the two touched base files, refuses incompatible source
-or conflicting new files, checks the patch before applying it, and verifies the
-result hashes. An already matching result returns `already_applied` without
-rewriting files. Full base-source validation remains a separate preparation step.
+See [standalone source and build instructions](../docs/STANDALONE_NATIVE.md)
+for offline preparation, build prerequisites and qualification boundaries.
+The lower-level `apply_overlay.py` remains available for an independently
+prepared base: it verifies the two touched base files, refuses incompatible
+source or conflicting new files, and checks and verifies the ownership patch.
 
 ## Protocol
 
@@ -76,9 +77,11 @@ Use the existing DOSBox-X build prerequisites and configure path:
 make -j2
 ```
 
-The repository tests compile the shared ownership policy and exercise actual
-pinned patch application when `DOTBOX_DOSBOX_BASE_SOURCE` points to prepared
-base files. Neither source tests nor a successful build establish human takeover
+The repository tests compile the shared ownership policy, verify all DotBox-owned
+recipe inputs and exercise immutable source export and both patch stages with
+authored fixtures. Pinned overlay application can also be checked when
+`DOTBOX_DOSBOX_BASE_SOURCE` points to prepared base files. Neither source tests
+nor a successful build establish human takeover
 on Dot's actual cloud computer. Native protocol tests and visible keyboard/mouse
 acceptance are separate checks.
 
