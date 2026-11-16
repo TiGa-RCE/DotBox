@@ -143,17 +143,18 @@ export async function observeOnce(tab, dotName) {
   }
 }
 
-function validatePrivate(stat, ownerUid, directory = false) {
+function validatePrivate(stat, ownerUid, directory = false, retiredRequest = false) {
   return stat.uid === ownerUid
     && (stat.mode & 0o7777) === (directory ? 0o700 : 0o600)
-    && (directory ? stat.isDirectory() : stat.isFile() && stat.nlink === 1 && stat.size <= MAX_MAILBOX_BYTES);
+    && (directory ? stat.isDirectory() : stat.isFile()
+      && (stat.nlink === 1 || retiredRequest && stat.nlink === 0) && stat.size <= MAX_MAILBOX_BYTES);
 }
 
 function sameFile(a, b) {
   return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
 }
 
-async function readPrivateFile(filename, checkDirectory, ownerUid) {
+async function readPrivateFile(filename, checkDirectory, ownerUid, {discardReplaced = false} = {}) {
   await checkDirectory();
   let handle;
   try {
@@ -164,7 +165,7 @@ async function readPrivateFile(filename, checkDirectory, ownerUid) {
   }
   try {
     const before = await handle.stat();
-    if (!validatePrivate(before, ownerUid)) throw new Error('Ownership mailbox requires small private regular files');
+    if (!validatePrivate(before, ownerUid, false, discardReplaced)) throw new Error('Ownership mailbox requires small private regular files');
     const buffer = Buffer.alloc(MAX_MAILBOX_BYTES + 1);
     let length = 0;
     while (length < buffer.length) {
@@ -173,10 +174,23 @@ async function readPrivateFile(filename, checkDirectory, ownerUid) {
       length += bytesRead;
     }
     const after = await handle.stat();
-    if (length > MAX_MAILBOX_BYTES || !validatePrivate(after, ownerUid) || !sameFile(before, after)) {
+    if (length > MAX_MAILBOX_BYTES || !validatePrivate(after, ownerUid, false, discardReplaced) || !sameFile(before, after)) {
       throw new Error('Ownership mailbox file changed or exceeded its limit');
     }
     await checkDirectory();
+    if (discardReplaced) {
+      // Atomic publication can unlink an already-open request inode. Permit
+      // nlink=0 only long enough to discard that retired read, never to publish
+      // its contents. All ownership/type/mode/size checks above still apply.
+      let current;
+      try {current = await fs.lstat(filename);} catch (error) {
+        if (error.code === 'ENOENT') return null;
+        throw error;
+      }
+      if (!validatePrivate(current, ownerUid)) throw new Error('Ownership mailbox requires small private regular files');
+      if (before.nlink === 0 || after.nlink === 0 || current.dev !== after.dev || current.ino !== after.ino) return null;
+      if (!sameFile(after, current)) throw new Error('Ownership mailbox file changed or exceeded its limit');
+    }
     return buffer.subarray(0, length);
   } finally {
     await handle.close();
@@ -252,7 +266,7 @@ export async function pumpMailbox(tab, dotName, {directory, viewerId, ownerUid, 
   try {
     await checkDirectory();
     while (performance.now() < deadline) {
-      const raw = await readPrivateFile(requestPath, checkDirectory, ownerUid);
+      const raw = await readPrivateFile(requestPath, checkDirectory, ownerUid, {discardReplaced: true});
       if (raw != null) {
         const requestHash = sha256(raw);
         let request;
@@ -269,7 +283,7 @@ export async function pumpMailbox(tab, dotName, {directory, viewerId, ownerUid, 
             const ax = capture.value;
             const {observation, binding} = parseSnapshot(ax, dotName, viewerId);
             const event = {...request.probe, ...observation};
-            const current = await readPrivateFile(requestPath, checkDirectory, ownerUid);
+            const current = await readPrivateFile(requestPath, checkDirectory, ownerUid, {discardReplaced: true});
             if (current != null && sha256(current) === requestHash && performance.now() < deadline) {
               if (onObservation) {
                 const callback = await beforeDeadline(() => onObservation({request_id: request.request_id, event: {...event},
@@ -277,7 +291,7 @@ export async function pumpMailbox(tab, dotName, {directory, viewerId, ownerUid, 
                   viewer_id: binding}), deadline);
                 if (callback.expired) break;
               }
-              const latest = await readPrivateFile(requestPath, checkDirectory, ownerUid);
+              const latest = await readPrivateFile(requestPath, checkDirectory, ownerUid, {discardReplaced: true});
               if (latest != null && sha256(latest) === requestHash && performance.now() < deadline) {
                 await readPrivateFile(responsePath, checkDirectory, ownerUid);
                 const temporary = path.join(directory, `response.json.${randomBytes(16).toString('hex')}`);

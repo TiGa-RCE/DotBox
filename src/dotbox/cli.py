@@ -54,13 +54,16 @@ def parser():
     serve.add_argument("--image", choices=("com", "mz"))
     serve.add_argument("--manual-control", action="store_true", help="Diagnostic native handoff/RPC input instead of default desktop-harness input; does not read WebRTC ownership.")
     serve.add_argument("--ownership-viewer", help="SHA-256 binding for the selected viewer; enable the separate authenticated ownership publisher.")
+    coordinate = commands.add_parser("coordinate", help="Serve ownership coordination without an emulator or game backend.")
+    coordinate.add_argument("--directory", required=True, help="Private coordinator directory (0700).")
+    coordinate.add_argument("--ownership-viewer", required=True, help="SHA-256 binding for the selected viewer.")
     for name in ("status", "frame", "control", "play", "pause", "key", "type", "click", "close",
                  "harness-list", "harness-info", "harness-save", "act",
-                 "turn-claim", "turn-check", "turn-release"):
+                 "turn-claim", "turn-check", "turn-release", "coordinator-close"):
         command = commands.add_parser(name)
         command.add_argument("--session", required=True, help="Path to private session.json descriptor.")
         if name not in ("status", "frame", "harness-list", "harness-info",
-                        "turn-claim", "turn-check", "turn-release"):
+                        "turn-claim", "turn-check", "turn-release", "coordinator-close"):
             command.add_argument("--lease", required=True, help="Previously saved status/response JSON; prevents stale-owner actions.")
         if name == "frame":
             command.add_argument("--output", required=True, help="New PNG destination.")
@@ -100,11 +103,15 @@ def main(argv=None):
         return probe_main(argv[1:])
     args = parser().parse_args(argv)
     try:
-        if args.command == "serve":
-            from .backend import DOSBoxBackend
-            config = {name: getattr(args, name) for name in ("project", "program", "game_dir", "executable", "image")}
-            service = PlayService(lambda: DOSBoxBackend(config), args.directory, manual_control=args.manual_control,
-                                  ownership_viewer=args.ownership_viewer)
+        if args.command in ("serve", "coordinate"):
+            if args.command == "serve":
+                from .backend import DOSBoxBackend
+                config = {name: getattr(args, name) for name in ("project", "program", "game_dir", "executable", "image")}
+                service = PlayService(lambda: DOSBoxBackend(config), args.directory, manual_control=args.manual_control,
+                                      ownership_viewer=args.ownership_viewer)
+            else:
+                from .coordination import CoordinationService
+                service = CoordinationService(args.directory, args.ownership_viewer)
             previous = {sig: signal.signal(sig, lambda *_: service.request_stop())
                         for sig in (signal.SIGINT, signal.SIGTERM)}
             try:

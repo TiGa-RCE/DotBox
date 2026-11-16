@@ -12,6 +12,22 @@ retains exactly `{"owner":"unknown","source":"unavailable"}` for
 `native_owner="host"` and the desktop input path. Direct native agent input stays
 disabled; `--manual-control` cannot be combined with the bridge.
 
+For an ownership receiver that does not need an emulator, use:
+
+```sh
+dotbox coordinate --directory '<private-directory>' --ownership-viewer '<viewer-sha256>'
+dotbox status --session '<private-directory>/session.json'
+dotbox coordinator-close --session '<private-directory>/session.json'
+```
+
+This uses the same authenticated transport, separate publisher capability and
+turn leases as `serve`. Its status contains only `instance_id`,
+`kind="ownership-coordinator"` and `platform_takeover`. It launches no backend
+and refuses game, frame, native input and native handoff operations. Shutdown
+also accepts SIGINT/SIGTERM and removes its descriptors and credentials. Keep
+the normal descriptor local to the cooperating caller; publisher possession
+does not authorize status, turn claims or shutdown.
+
 ## Enable and bind one viewer
 
 Add `--ownership-viewer <viewer-sha256>` to the existing verified `dotbox serve`
@@ -167,8 +183,12 @@ observations while the earlier lease stayed invalid, and the final viewer UI
 showed Dot control. These results do not place the receiver on Dot's computer
 or demonstrate a live desktop action through `run_turn_step`.
 
-Hosted verification remains blocked by the managed runtime's repository-account
-startup failure. There is no qualified Dot cloud receiver/deployment, atomic
+The later [environment repair and coordinator verification](evidence/ownership-coordinator-2026-11-16.json)
+supersedes that startup failure: a fresh task using the same saved environment
+starts and checks out the intended private repository after the existing GitHub
+connection was refreshed. The old failed task stays failed. Current managed
+private TCP connections time out before SSH authentication, so live cloud
+delivery remains unqualified. There is no qualified Dot cloud receiver/deployment, atomic
 capture lock, server lease or guarantee against missed between-poll transitions.
 Keep raw observations, screenshots, routes, credentials and environment/chat IDs
 outside Git. Audio and gameplay work remain deferred.

@@ -55,7 +55,7 @@ class Client:
             if lease is None:
                 raise ClientError("Mutating requests require a previously observed session lease.")
             request.update(instance_id=lease["instance_id"], expected_generation=lease["generation"])
-        elif op in TURN_OPS | BRIDGE_OPS:
+        elif op in TURN_OPS | BRIDGE_OPS | {"status", "coordinator-close"}:
             request["instance_id"] = self.descriptor["instance_id"]
         payload = encoded(request)
         if len(payload) > MAX_REQUEST:

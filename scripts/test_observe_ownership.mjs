@@ -305,6 +305,119 @@ test('superseded request gets no response from its in-flight AX capture', async 
   assert.equal(records[0].request_id, second.request_id);
 }));
 
+for (const replacement of ['rename', 'delete']) {
+  test(`request ${replacement} during an open read is discarded and the pump continues`, async t => mailbox(async directory => {
+    await writeRequest(directory);
+    const filename = path.join(directory, 'request.json');
+    const original = await fs.stat(filename);
+    const example = await fs.open(filename);
+    const prototype = Object.getPrototypeOf(example);
+    const read = prototype.read;
+    await example.close();
+    const second = {...request, request_id: 'e'.repeat(64),
+      probe: {...probe, challenge: 'f'.repeat(64), sequence: 2}};
+    let raced = false;
+    let publication;
+    t.mock.method(prototype, 'read', async function (...args) {
+      const opened = await this.stat();
+      if (!raced && opened.dev === original.dev && opened.ino === original.ino) {
+        raced = true;
+        if (replacement === 'rename') await writeRequest(directory, second);
+        else {
+          await fs.unlink(filename);
+          publication = sleep(30).then(() => writeRequest(directory, second));
+        }
+        assert.equal((await this.stat()).nlink, 0);
+      }
+      return read.apply(this, args);
+    });
+    const records = [];
+    let captures = 0;
+    try {
+      const result = await pumpMailbox({getAXState: async () => {captures++; return boundPanel();}}, 'Ada',
+        {directory, viewerId, durationMs: 180, onObservation: record => {records.push(record);}});
+      assert.equal(raced, true);
+      assert.deepEqual(result, {processed: 1, rejected: 0});
+      assert.equal(captures, 1);
+      assert.deepEqual(records.map(record => record.request_id), [second.request_id]);
+      assert.deepEqual(await response(directory, second.request_id),
+        {request_id: second.request_id, event: {...second.probe, ...dot}});
+    } finally {
+      await publication;
+    }
+  }));
+}
+
+test('request with a second hard link remains unsafe', async () => mailbox(async directory => {
+  await writeRequest(directory);
+  await fs.link(path.join(directory, 'request.json'), path.join(directory, 'retained-link'));
+  await assert.rejects(pumpMailbox({getAXState: () => assert.fail('Unsafe request reached browser')}, 'Ada',
+    {directory, viewerId, durationMs: 80}), /private/);
+}));
+
+test('request owner UID is checked on the opened file', async t => mailbox(async directory => {
+  await writeRequest(directory);
+  const filename = path.join(directory, 'request.json');
+  const original = await fs.stat(filename);
+  const example = await fs.open(filename);
+  const prototype = Object.getPrototypeOf(example);
+  const stat = prototype.stat;
+  await example.close();
+  t.mock.method(prototype, 'stat', async function (...args) {
+    const opened = await stat.apply(this, args);
+    if (opened.dev === original.dev && opened.ino === original.ino) opened.uid++;
+    return opened;
+  });
+  await assert.rejects(pumpMailbox({getAXState: () => assert.fail('Wrong owner reached browser')}, 'Ada',
+    {directory, viewerId, durationMs: 80}), /private/);
+}));
+
+test('in-place request mutation still stops the pump', async t => mailbox(async directory => {
+  await writeRequest(directory);
+  const filename = path.join(directory, 'request.json');
+  const original = await fs.stat(filename);
+  const example = await fs.open(filename);
+  const prototype = Object.getPrototypeOf(example);
+  const read = prototype.read;
+  await example.close();
+  let changed = false;
+  t.mock.method(prototype, 'read', async function (...args) {
+    const opened = await this.stat();
+    if (!changed && opened.dev === original.dev && opened.ino === original.ino) {
+      changed = true;
+      await fs.appendFile(filename, ' ');
+    }
+    return read.apply(this, args);
+  });
+  await assert.rejects(pumpMailbox({getAXState: () => assert.fail('Changed bytes reached browser')}, 'Ada',
+    {directory, viewerId, durationMs: 80}), /changed/);
+  assert.equal(changed, true);
+}));
+
+test('retired read cannot hide an unsafe replacement pathname', async t => mailbox(async directory => {
+  await writeRequest(directory);
+  const filename = path.join(directory, 'request.json');
+  const original = await fs.stat(filename);
+  const example = await fs.open(filename);
+  const prototype = Object.getPrototypeOf(example);
+  const read = prototype.read;
+  await example.close();
+  let replaced = false;
+  t.mock.method(prototype, 'read', async function (...args) {
+    const opened = await this.stat();
+    if (!replaced && opened.dev === original.dev && opened.ino === original.ino) {
+      replaced = true;
+      await writeRequest(directory, {...request, request_id: 'e'.repeat(64)});
+      await fs.chmod(filename, 0o644);
+      assert.equal((await this.stat()).nlink, 0);
+    }
+    return read.apply(this, args);
+  });
+  await assert.rejects(pumpMailbox({getAXState: () => assert.fail('Unsafe replacement reached browser')}, 'Ada',
+    {directory, viewerId, durationMs: 80}), /private/);
+  assert.equal(replaced, true);
+}));
+
 test('finite pump does not wait indefinitely for AX or publish a late result', async () => mailbox(async directory => {
   await writeRequest(directory);
   let captureResolved = false;

@@ -1,0 +1,133 @@
+{
+  "schema": "dotbox-ownership-coordinator-verification-1",
+  "date": "2026-11-16",
+  "source_parent_commit": "2a4d563ee35a5ccbf90f8339a31ad2fbb8082ea8",
+  "implemented": [
+    "Coordination-only receiver reuses existing authenticated PlayService transport and real OwnershipState with no backend",
+    "Strict instance-fenced status, turn and coordinator-close operations; game/native operations refused",
+    "Atomic request replacement/deletion discards retired reads without stopping the bounded observer; unsafe files remain rejected"
+  ],
+  "verification": {
+    "source_suite": {
+      "passed": 359,
+      "skipped": 0,
+      "seconds": 23.34
+    },
+    "installed_wheel_checks": {
+      "passed": 97,
+      "skipped": 0,
+      "deselected": 1,
+      "seconds": 18.94,
+      "exclusion": "One source-tree-only static import audit is covered by the full source suite; external installed-check tree contains no src directory",
+      "native_scope": "Includes real existing native executable/input checks; native source and executable were not rebuilt"
+    },
+    "observer": {
+      "passed": 41,
+      "skipped": 0
+    },
+    "independent_review": "No concrete concerns in coordinator or observer race fix; root separately inspected diffs and reran integrated checks",
+    "package": {
+      "wheel_sha256": "ae24e8bda03cabdcf83ab61ce94d861b57bf30af19a95a799fa191f67715b75c",
+      "bytes": 54103,
+      "runtime_modules_exact": 21
+    },
+    "fdisbull_importable_in_clean_install": false
+  },
+  "live_authenticated_local": {
+    "source_samples": 126,
+    "receiver_samples": 126,
+    "owners": {
+      "dot": 121,
+      "human": 5
+    },
+    "source_failures_blocked": 7,
+    "callbacks": [
+      {
+        "label": "initial",
+        "wait_ms": null
+      },
+      {
+        "label": "after-return",
+        "wait_ms": 1700.0878339167684
+      },
+      {
+        "label": "after-source-reopen",
+        "wait_ms": 1.358334207907319
+      }
+    ],
+    "old_lease_checks_denied": 121,
+    "source_receiver_exact_join": true,
+    "receiver": "Local Mac real CoordinationService and Client from ordinary installed wheel",
+    "callback_kind": "Three harmless data-only callbacks; no desktop input callback",
+    "observer_durations_ms": [
+      24000,
+      7000
+    ],
+    "final_owner": "dot",
+    "descriptors_credentials_removed": true
+  },
+  "cloud_startup": {
+    "restored": true,
+    "method": "Corrected misleading account display label; refreshed intended existing GitHub connection; started one authorized fresh task from same saved configuration",
+    "actual_private_checkout_and_exact_head_verified": true,
+    "python": "3.12.14",
+    "saved_environment_settings_or_github_grants_changed": false,
+    "old_failed_task_restored": false,
+    "stored_account_link_field": "Not exposed by catalog or offered setup update schema; hidden-field root cause remains unproved"
+  },
+  "cloud_transport": {
+    "live_bridge_qualified": false,
+    "observed_failure": "Existing primary SSH helper and banner-only managed CONNECT checks time out503 before authentication",
+    "cause_evidence": "Current applied source allowlist and correlated source-host TCP drops show no rule matched the fresh runtime identity",
+    "scoped_rule": "User authorized one runtime to one source host on SSH22 only; application/readback pending",
+    "fallback_or_new_public_listener": false
+  },
+  "limits": [
+    "Sampled English viewer UI coordinates cooperating callers; not a server ownership event subscription or atomic capture lock",
+    "Between-sample transitions and input already in flight remain outside the bridge guarantee",
+    "Local callback witnesses do not qualify a cloud receiver or desktop input through run_turn_step",
+    "No new sound or gameplay feature; no new native build or release installation"
+  ],
+  "private_receipts": [
+    {
+      "name": "installed-checks-02.log",
+      "bytes": 194,
+      "sha256": "9b793eacebf5ca95065754f97259ec1b18924cacede3b5a5257a7fcaba4f14ef"
+    },
+    {
+      "name": "observer-02.log",
+      "bytes": 7949,
+      "sha256": "16ae7ac3c4a75c6f75baff5c637657e947581c9c5fb7f1a253415ec2e4588c1c"
+    },
+    {
+      "name": "candidate-identity-01.json",
+      "bytes": 2047,
+      "sha256": "2d9ef915faabf7846bc2addab36e6399262be569e2dd9fbfdecb98d448152623"
+    },
+    {
+      "name": "live-auth-03/receiver.jsonl",
+      "bytes": 123939,
+      "sha256": "2bf1289fb1ec3422f7ecb972aa7645445bdd52e84824ac19b93df85acce97a31"
+    },
+    {
+      "name": "live-auth-03/observer.jsonl",
+      "bytes": 60472,
+      "sha256": "f784133d168ae44408fc6da0520f7f879a40770eb8f2441613c0bbc1a6de1da5"
+    },
+    {
+      "name": "live-auth-03/actions.jsonl",
+      "bytes": 2622,
+      "sha256": "369d43eec3a28a23000786de27f2f100290bd82be33877ce3cdeb603a5727d06"
+    },
+    {
+      "name": "live-auth-03/summary.json",
+      "bytes": 810,
+      "sha256": "d4ac4b568ef9e97d59fa39389eb0f7f1dc03c2bf4e64fd4138a1cfbda0b0c7cd"
+    },
+    {
+      "name": "studio-denial-correlation.json",
+      "bytes": 487,
+      "sha256": "76fff605a2a00bc60b85d93126fffdf2d168350597f0ab7c06f3d6d3aa4eac5c"
+    }
+  ]
+}
