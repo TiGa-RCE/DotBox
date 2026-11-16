@@ -1,5 +1,6 @@
 """Short-lived authenticated clients; never retry a game effect automatically."""
 
+import inspect
 import json
 import os
 from pathlib import Path
@@ -87,6 +88,7 @@ class Client:
 
         The outer harness remains responsible for capture and in-flight input.
         This is a decision fence, not an atomic lock around an external tool.
+        Actions must return completed synchronous results, not awaitables.
         """
         before = self.request("turn-check", {"lease": lease})
         if not before["ok"]:
@@ -95,6 +97,17 @@ class Client:
             result = action()
         except Exception as error:
             raise TurnInterrupted("Desktop action failed; effects are unknown, inspect before continuing") from error
+        if inspect.isawaitable(result):
+            message = ("Desktop callback returned an awaitable; a completed synchronous result is required. "
+                       "Effects may have occurred; inspect before continuing")
+            # Only an unstarted native coroutine can be closed without running
+            # its body/finalizers. Other awaitables remain entirely caller-owned.
+            if inspect.iscoroutine(result) and inspect.getcoroutinestate(result) == inspect.CORO_CREATED:
+                try:
+                    result.close()
+                except Exception as error:
+                    raise TurnInterrupted(message) from error
+            raise TurnInterrupted(message)
         try:
             after = self.request("turn-check", {"lease": lease})
         except (OSError, ValueError) as error:

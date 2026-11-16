@@ -151,6 +151,18 @@ result = client.run_turn_step(lease, action)
 ```
 
 `action` is one already authorized, zero-argument desktop callback.
+It must return a completed synchronous result. An awaitable result raises
+`TurnInterrupted`; the helper never awaits it or returns it as a successful
+fenced action. Only an unstarted native coroutine is closed. Other awaitables
+stay caller-owned and are not cancelled or resumed. A callback can have effects
+before returning an awaitable, so rejection still requires inspection.
+
+Model-level CUA tools are asynchronous and cannot be invoked by passing a
+coroutine to this synchronous helper. They need an awaited fence in their own
+supported executor, with access to the ownership receiver. Separate model-level
+before/tool/after calls only establish a bounded check if the same unchanged
+lease is still valid afterward; they are not an atomic tool lock.
+
 `wait_for_turn` waits locally while the service continues accepting source
 updates; fresh Dot evidence after human return can admit the next turn.
 `run_turn_step` checks the lease before and after the callback. It refuses to
@@ -170,8 +182,8 @@ not fenced by it.
 
 ## Verification boundary — 16 November 2026
 
-The current source suite passes 359 checks with no skips. A fresh ordinary Mac
-wheel installation passes 97 selected checks, including existing real native
+The current source suite passes 369 checks with no skips. A fresh ordinary Mac
+wheel installation passes 107 selected checks, including existing real native
 checks. One source-tree-only static audit is excluded from that external test
 directory and covered by the full source suite. All 21 runtime modules match
 source, wheel and installation; fDisBull is unavailable there. The observer
@@ -180,9 +192,12 @@ replacements and in-place mutation. Retired request reads are discarded without
 stopping the pump; response-file validation remains strict.
 
 The same 21 module identities match an ordinary wheel built and installed in the
-approved managed headless environment under Python 3.12.14. Its 54 selected
+approved managed headless environment under Python 3.12.14. Its 64 selected
 isolated installed checks use real authenticated sockets and synthetic ownership.
 Those checks qualify cloud loopback operation separately from live delivery.
+Ten callback regressions reproduce and fix the prior helper's acceptance of
+awaitable results as synchronous successes. The earlier live data-only runs
+below used the previous package; their original receipts remain unchanged.
 
 The saved environment now starts and checks out the intended private repository
 after the existing GitHub connection was refreshed. Both account connections
@@ -228,3 +243,12 @@ records exact package identities, live joins and remaining limits. The
 snapshot. Raw observations, screenshots, routes, credentials, account aliases
 and environment/chat identifiers stay outside Git. Sound and gameplay remain
 deferred.
+
+The [latest actual-input preflight](evidence/desktop-ownership-preflight-2026-11-16.json)
+remains blocked before any desktop input. The original Dot context does not
+offer the retained receiver in its checked attachment list. Its listed source
+computer attachment fails during configuration resolution with a managed-network
+enforcement error. Original context restoration was reported. No supported
+cross-context command or private preview route was exposed by the checked tools.
+The effective resolver policy and a supported repair remain unknown; this is a
+current capability gate, not proof of an immutable platform limitation.
