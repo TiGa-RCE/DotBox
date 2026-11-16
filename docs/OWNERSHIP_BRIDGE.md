@@ -244,11 +244,26 @@ snapshot. Raw observations, screenshots, routes, credentials, account aliases
 and environment/chat identifiers stay outside Git. Sound and gameplay remain
 deferred.
 
-The [latest actual-input preflight](evidence/desktop-ownership-preflight-2026-11-16.json)
-remains blocked before any desktop input. The original Dot context does not
-offer the retained receiver in its checked attachment list. Its listed source
-computer attachment fails during configuration resolution with a managed-network
-enforcement error. Original context restoration was reported. No supported
-cross-context command or private preview route was exposed by the checked tools.
-The effective resolver policy and a supported repair remain unknown; this is a
-current capability gate, not proof of an immutable platform limitation.
+The [earlier actual-input preflight](evidence/desktop-ownership-preflight-2026-11-16.json)
+records the original managed-network attachment failure. The
+[connection follow-up](evidence/studio-connection-repair-2026-11-16.json) clears
+that failure in three strict attachments after changing only Studio's local
+default from `danger-full-access` to `workspace-write`. Approval remains `never`,
+the network proxy stays enabled, and all unrelated parsed settings are preserved.
+No managed requirements, network grants or credentials changed. A private file
+challenge, whose contents and expected digest were withheld from Dot, returned
+exit 0 and the exact independently computed Studio digest. The sandboxed default
+is retained. The attachment resolver did not expose its effective profile;
+these successful attempts establish restored access, not a universal repair or
+proof of every selected enforcement detail.
+
+Actual desktop input through the bridge remains unverified. Selecting Studio
+changed global CUA inventory to the Mac. A separate read-only retained-handle
+test then found that CUA had reinitialized: the original cloud app variable was
+undefined. This establishes lost handle state, rather than proving where a
+surviving handle would route. Dot restored its original cloud environment after
+each check; final inventory again identified the original Chromium window.
+No keyboard/mouse input was issued. The checked tools still do not expose a
+supported coordinator client in the original desktop executor, the retained
+receiver in Dot's attachment list, or a private preview/cross-thread command
+route. These are remaining capability gates, not immutable platform limits.

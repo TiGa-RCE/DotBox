@@ -52,3 +52,24 @@ and a new lease after fresh observations. Harmless
 headless callbacks establish coordination behavior; actual desktop-tool input
 through the wrapper remains unqualified. The receiver launches no emulator.
 See the [sanitized verification receipt](evidence/ownership-coordinator-2026-11-16.json).
+
+## Connected Studio attachment follow-up
+
+The separate original Dot chat could not select its listed Studio computer:
+configuration resolution returned `managed network requirements require sandbox
+enforcement`. Changing only the connected Mac's user-config default from
+`danger-full-access` to `workspace-write` cleared that error in three strict
+attachments. The existing network proxy, approval policy and every unrelated
+parsed setting were preserved. A read-only private-file challenge returned the
+exact digest independently computed on Studio. This sandboxed default remains
+active, with its prior configuration privately preserved for rollback.
+
+This repairs the checked connection, without establishing its unexposed effective
+profile or a general fix for other installations. In the retained-handle check,
+CUA reinitialized and the previously bound cloud app variable was unavailable.
+This does not establish where a surviving handle would route. Dot restored
+its original cloud environment after every check. Actual ownership-gated
+keyboard/mouse input remains unverified until the coordinator is reachable from
+that original desktop executor. See the
+[connection receipt](evidence/studio-connection-repair-2026-11-16.json). No sound
+or gameplay work was added.

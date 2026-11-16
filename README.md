@@ -22,9 +22,14 @@ ownership stays separate. A coordination-only receiver can run without an
 emulator. The real viewer-to-headless-receiver handoff is verified over the existing
 private SSH route, using harmless data callbacks. The saved operations environment
 starts. Actual desktop-tool input through the turn wrapper remains unqualified.
-The [latest preflight](docs/evidence/desktop-ownership-preflight-2026-11-16.json)
-records the missing command connection and the fix preventing asynchronous
-callbacks from being reported as completed synchronous actions.
+The [connection follow-up](docs/evidence/studio-connection-repair-2026-11-16.json)
+verifies restored Studio attachment with a sandboxed default. In the checked
+attachment, Dot's desktop-tool session reinitialized and its bound cloud app
+variable was unavailable. The original cloud desktop and coordinator still need
+a shared supported execution path for the input check.
+The [earlier preflight](docs/evidence/desktop-ownership-preflight-2026-11-16.json)
+also records the fix preventing asynchronous callbacks from being reported as
+completed synchronous actions.
 
 Additional AGI readers, walking, game-specific routes and HUD experiments remain
 preserved in the original development checkout. They are deferred from this
