@@ -7,17 +7,26 @@ import re
 import socket
 import stat
 import uuid
+import time
 
-from .service import MAX_REQUEST, MAX_RESPONSE, MUTATIONS, PROTOCOL, encoded, receive_line
+from .service import BRIDGE_OPS, TURN_OPS, MAX_REQUEST, MAX_RESPONSE, MUTATIONS, PROTOCOL, encoded, receive_line
 
 
 class ClientError(ValueError):
     pass
 
 
+class TurnInterrupted(ClientError):
+    """An effect may have completed; callers must inspect rather than replay."""
+
+    def __init__(self, message, *, result=None):
+        super().__init__(message)
+        self.result = result
+
+
 def private_file(path, *, limit=4096):
     path = Path(path)
-    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     with os.fdopen(fd, "rb") as source:
         info = os.fstat(source.fileno())
         if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077 or info.st_size > limit:
@@ -46,6 +55,8 @@ class Client:
             if lease is None:
                 raise ClientError("Mutating requests require a previously observed session lease.")
             request.update(instance_id=lease["instance_id"], expected_generation=lease["generation"])
+        elif op in TURN_OPS | BRIDGE_OPS:
+            request["instance_id"] = self.descriptor["instance_id"]
         payload = encoded(request)
         if len(payload) > MAX_REQUEST:
             raise ClientError("Request exceeds byte limit.")
@@ -57,3 +68,37 @@ class Client:
                 or response.get("id") != request["id"] or type(response.get("ok")) is not bool):
             raise ClientError("Invalid response; request outcome is unknown. Do not replay automatically.")
         return response
+
+    def wait_for_turn(self, controller_id, *, timeout=10, interval=0.1):
+        """Wait locally; never block the sole service listener receiving updates."""
+        if not 0 <= timeout <= 3600 or not 0.01 <= interval <= 5:
+            raise ValueError("Invalid turn wait duration")
+        deadline = time.monotonic() + timeout
+        while True:
+            reply = self.request("turn-claim", {"controller_id": controller_id})
+            if reply["ok"]:
+                return reply["result"]
+            if reply["error"]["code"] != "turn_unavailable" or time.monotonic() >= deadline:
+                raise ClientError(reply["error"]["message"])
+            time.sleep(min(interval, max(0, deadline - time.monotonic())))
+
+    def run_turn_step(self, lease, action):
+        """Fence one cooperating desktop action; never retry an unknown effect.
+
+        The outer harness remains responsible for capture and in-flight input.
+        This is a decision fence, not an atomic lock around an external tool.
+        """
+        before = self.request("turn-check", {"lease": lease})
+        if not before["ok"]:
+            raise TurnInterrupted(before["error"]["message"])
+        try:
+            result = action()
+        except Exception as error:
+            raise TurnInterrupted("Desktop action failed; effects are unknown, inspect before continuing") from error
+        try:
+            after = self.request("turn-check", {"lease": lease})
+        except (OSError, ValueError) as error:
+            raise TurnInterrupted("Action outcome requires inspection; coordination check failed", result=result) from error
+        if not after["ok"]:
+            raise TurnInterrupted("Ownership changed during the action; inspect before continuing", result=result)
+        return result

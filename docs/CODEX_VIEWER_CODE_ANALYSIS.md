@@ -1,5 +1,9 @@
 # Codex viewer code and ownership
 
+> Follow-up: [the optional ownership bridge](OWNERSHIP_BRIDGE.md) now implements
+> bounded UI observation and cooperating turn coordination. This investigation
+> remains the earlier artifact and input-path evidence, not a cloud deployment.
+
 16 November 2026. This combines shipped-artifact analysis, an offline replay of
 actual extracted client code, and a separately scoped live web-viewer check.
 Sound and gameplay work remain deferred. No installed app was modified.

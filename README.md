@@ -16,9 +16,10 @@ The first milestone is the engine and its ownership boundary: one guest survives
 client calls, frames can be observed, and stale agent input is refused after
 explicit human handoff in diagnostic mode. Normal input stays on the desktop
 harness path, with direct agent input RPCs disabled. Codex's **Take over / Return control** buttons belong to
-the outer WebRTC harness. Native input ownership is separate; automatic
-synchronization requires a supported harness event/provider and is not claimed
-by local ownership tests.
+the outer WebRTC harness. The optional [ownership bridge](docs/OWNERSHIP_BRIDGE.md)
+uses fresh viewer observations to coordinate cooperating agent turns. Native
+ownership stays separate. The real viewer-to-local-receiver path is verified;
+delivery to Dot's headless environment remains unqualified.
 
 Additional AGI readers, walking, game-specific routes and HUD experiments remain
 preserved in the original development checkout. They are deferred from this

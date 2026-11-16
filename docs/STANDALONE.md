@@ -28,11 +28,13 @@ Codex's existing Take over / Return control flow decides who can send that input
 DotBox neither replaces those buttons nor needs to guess their owner from pixels.
 Frame observation and control authoring remain available. Direct agent RPC input,
 play and pause are refused in this mode, so they cannot bypass the outer capture
-boundary. The service reports `owner: harness` and platform owner `unknown`.
-This input-routing contract is tested locally; actual WebRTC operation remains
-unqualified until exercised on Dot's computer. The preserved
-[transport investigation](SCREEN_TRANSPORT.md) records internal WebRTC ownership
-signals, without claiming a supported Dot-facing API.
+boundary. The service reports `owner: harness`; platform owner stays `unknown`
+unless the optional [ownership bridge](OWNERSHIP_BRIDGE.md) is explicitly bound
+and receives fresh viewer evidence. Existing-viewer keyboard/mouse operation is
+verified separately from native DotBox cloud installation. The bridge's actual
+viewer-to-local-receiver path is verified; delivery to Dot's headless environment
+remains unqualified. The preserved [transport investigation](SCREEN_TRANSPORT.md)
+records earlier internal signals without claiming a supported Dot-facing API.
 
 ## Explicit native handoff diagnostics
 

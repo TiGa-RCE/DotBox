@@ -2,7 +2,7 @@
 
 import json
 import os
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from pathlib import Path
 import re
 import socket
@@ -16,6 +16,8 @@ MAX_REQUEST = 65536
 MAX_RESPONSE = 12 * 1024 * 1024
 MUTATIONS = {"control", "play", "pause", "key", "type", "click", "close", "harness-save", "act"}
 READS = {"status", "frame", "harness-list", "harness-info"}
+BRIDGE_OPS = {"bridge-open", "bridge-challenge", "bridge-observe", "bridge-invalidate"}
+TURN_OPS = {"turn-claim", "turn-check", "turn-release"}
 
 
 class ProtocolError(ValueError):
@@ -63,6 +65,8 @@ def private_directory(path):
 
 
 def authorized(request, credential):
+    if credential is None:
+        return False
     token = request.get("token") if isinstance(request, dict) else None
     if not isinstance(token, str) or re.fullmatch(r"[0-9a-f]{64}", token) is None:
         return False
@@ -103,7 +107,7 @@ class PlayService:
     """
 
     def __init__(self, backend_factory, directory, *, manual_control=False,
-                 client_timeout=1.0, credential_factory=None):
+                 client_timeout=1.0, credential_factory=None, ownership_viewer=None):
         if type(manual_control) is not bool:
             raise ValueError("manual_control must be boolean")
         if not 0.05 <= client_timeout <= 10:
@@ -119,6 +123,14 @@ class PlayService:
         self.generation = None
         self.backend = None
         self.failure = None
+        self.ownership = None
+        self.publisher_credential = None
+        self._bridge_native_identity = None
+        if ownership_viewer is not None:
+            if manual_control:
+                raise ValueError("The ownership bridge requires desktop-harness mode")
+            from .ownership import OwnershipState
+            self.ownership = OwnershipState(ownership_viewer)
 
     def request_stop(self):
         self.stop_requested.set()
@@ -135,6 +147,13 @@ class PlayService:
         expected = {"agent": "agent", "human": "host", "harness": "host"}.get(self.owner)
         if expected is not None and control["owner"] != expected:
             self.owner = "unclaimed"
+        if self.ownership is not None:
+            identity = (status["run_id"], status.get("native_session_id"), generation, control["owner"])
+            if self._bridge_native_identity is not None and identity != self._bridge_native_identity:
+                stream = self.ownership.status()["stream_id"]
+                if stream is not None:
+                    self.ownership.invalidate(stream)
+            self._bridge_native_identity = identity
         return {
             "instance_id": self.instance_id,
             "run_id": status["run_id"],
@@ -146,7 +165,8 @@ class PlayService:
             "native_owner": control["owner"],
             "control_source": ("desktop-input-path" if self.owner == "harness" else
                                "manual" if self.owner in ("agent", "human") else "unavailable"),
-            "platform_takeover": {"owner": "unknown", "source": "unavailable"},
+            "platform_takeover": (self.ownership.status() if self.ownership is not None else
+                                  {"owner": "unknown", "source": "unavailable"}),
             "manual_control_enabled": self.manual_control,
         }
 
@@ -160,9 +180,26 @@ class PlayService:
         op, params = request.get("op"), request.get("params", {})
         if not isinstance(op, str) or not isinstance(params, dict):
             raise ProtocolError("invalid_request", "Operation and object params are required.")
-        if op not in MUTATIONS | READS:
+        if op not in MUTATIONS | READS | TURN_OPS:
             raise ProtocolError("unknown_operation", "Unknown operation.")
         current = self.snapshot()
+        if op in TURN_OPS:
+            if request.get("instance_id") != self.instance_id:
+                raise ProtocolError("stale_instance", "Read this service's current instance before acting.")
+            if self.ownership is None:
+                raise ProtocolError("bridge_unavailable", "No ownership publisher is configured.")
+            if current["owner"] != "harness" or current["native_owner"] != "host":
+                raise ProtocolError("turn_unavailable", "The native desktop-harness boundary changed; inspect the session.")
+            try:
+                if op == "turn-claim" and set(params) == {"controller_id"}:
+                    return self.ownership.claim(params["controller_id"])
+                if op == "turn-check" and set(params) == {"lease"}:
+                    return self.ownership.check(params["lease"])
+                if op == "turn-release" and set(params) == {"lease"}:
+                    return self.ownership.release(params["lease"])
+                raise ValueError("Invalid turn parameters")
+            except ValueError as error:
+                raise ProtocolError("turn_unavailable", str(error)) from error
         if op in MUTATIONS:
             if request.get("instance_id") != self.instance_id:
                 raise ProtocolError("stale_instance", "Read this service's current instance before acting.")
@@ -222,6 +259,38 @@ class PlayService:
             raise ProtocolError("human_has_control", "Agent input is disabled during human control.")
         return getattr(self.backend, op)(params, self.generation)
 
+    def _bridge_dispatch(self, request):
+        # The publisher capability cannot close, pause or inject game input.
+        if self.ownership is None or not authorized(request, self.publisher_credential):
+            raise ProtocolError("unauthorized", "Publisher authentication required.")
+        if (set(request) - {"protocol", "id", "token", "op", "params", "instance_id"}
+                or request.get("protocol") != PROTOCOL):
+            raise ProtocolError("invalid_request", "Invalid publisher request.")
+        if request.get("instance_id") != self.instance_id:
+            raise ProtocolError("stale_instance", "Publisher belongs to another service instance.")
+        params = request.get("params", {})
+        if not isinstance(params, dict):
+            raise ProtocolError("invalid_params", "Object params are required.")
+        try:
+            op = request["op"]
+            if op == "bridge-open" and set(params) == {"viewer_id"}:
+                return self.ownership.open(params["viewer_id"])
+            if op == "bridge-challenge" and set(params) == {"stream_id"}:
+                return self.ownership.challenge(params["stream_id"])
+            if op == "bridge-observe":
+                return self.ownership.observe(params)
+            if op == "bridge-invalidate" and set(params) == {"stream_id"}:
+                return self.ownership.invalidate(params["stream_id"])
+            raise ValueError("Invalid publisher parameters")
+        except ValueError as error:
+            # Malformed/reordered evidence from the current authenticated stream
+            # is a gap, not permission to retain its last Dot grant.
+            current_stream = self.ownership.status()["stream_id"]
+            if (request.get("op") == "bridge-observe" and current_stream is not None
+                    and params.get("stream_id") == current_stream):
+                self.ownership.invalidate(current_stream)
+            raise ProtocolError("ownership_rejected", str(error)) from error
+
     def handle(self, request, credential):
         from .harness import ActionInterrupted
         ident = request.get("id") if isinstance(request, dict) else None
@@ -230,7 +299,10 @@ class PlayService:
             ident = None
         reply = {"protocol": PROTOCOL, "id": ident}
         try:
-            reply.update(ok=True, result=self._dispatch(request, credential))
+            publisher = (isinstance(request, dict) and isinstance(request.get("op"), str)
+                         and request["op"] in BRIDGE_OPS)
+            result = self._bridge_dispatch(request) if publisher else self._dispatch(request, credential)
+            reply.update(ok=True, result=result)
         except ProtocolError as error:
             reply.update(ok=False, error={"code": error.code, "message": str(error)})
         except ActionInterrupted as error:
@@ -286,7 +358,11 @@ class PlayService:
             if not self.manual_control:
                 self._start_harness_input()
             initial = self.snapshot()
-            with self.credential_factory() as credential:
+            with ExitStack() as stack:
+                credential = stack.enter_context(self.credential_factory())
+                if self.ownership is not None:
+                    from .local_auth import LocalCredential
+                    self.publisher_credential = stack.enter_context(LocalCredential("dotbox-owner-publisher-"))
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
                     listener.bind(("127.0.0.1", 0))
                     listener.listen(8)
@@ -299,6 +375,13 @@ class PlayService:
                         output.write(encoded(descriptor))
                         output.flush()
                         os.fsync(output.fileno())
+                    publisher_path = directory / "ownership-publisher.json"
+                    if self.ownership is not None:
+                        publisher_descriptor = {**descriptor, "role": "ownership-publisher",
+                                                "password_file": str(self.publisher_credential.path)}
+                        publisher_fd = os.open(publisher_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                        with os.fdopen(publisher_fd, "wb") as output:
+                            output.write(encoded(publisher_descriptor))
                     if on_ready is not None:
                         on_ready({"descriptor": str(descriptor_path), "session": initial})
                     while not self.stop_requested.is_set():
@@ -324,6 +407,13 @@ class PlayService:
                     self.backend.close()
             finally:
                 if published:
+                    if self.ownership is not None:
+                        try:
+                            publisher_path = directory / "ownership-publisher.json"
+                            if json.loads(publisher_path.read_text()).get("instance_id") == self.instance_id:
+                                publisher_path.unlink()
+                        except (OSError, ValueError):
+                            pass
                     try:
                         if json.loads(descriptor_path.read_text()).get("instance_id") == self.instance_id:
                             descriptor_path.unlink()

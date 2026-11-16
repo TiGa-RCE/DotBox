@@ -10,7 +10,7 @@ import signal
 import stat
 import sys
 
-from .client import Client
+from .client import Client, private_file
 from .service import PlayService
 
 
@@ -53,14 +53,21 @@ def parser():
     serve.add_argument("--executable", required=True, help="Prepared DOSBox-X with DotBox ownership extension.")
     serve.add_argument("--image", choices=("com", "mz"))
     serve.add_argument("--manual-control", action="store_true", help="Diagnostic native handoff/RPC input instead of default desktop-harness input; does not read WebRTC ownership.")
+    serve.add_argument("--ownership-viewer", help="SHA-256 binding for the selected viewer; enable the separate authenticated ownership publisher.")
     for name in ("status", "frame", "control", "play", "pause", "key", "type", "click", "close",
-                 "harness-list", "harness-info", "harness-save", "act"):
+                 "harness-list", "harness-info", "harness-save", "act",
+                 "turn-claim", "turn-check", "turn-release"):
         command = commands.add_parser(name)
         command.add_argument("--session", required=True, help="Path to private session.json descriptor.")
-        if name not in ("status", "frame", "harness-list", "harness-info"):
+        if name not in ("status", "frame", "harness-list", "harness-info",
+                        "turn-claim", "turn-check", "turn-release"):
             command.add_argument("--lease", required=True, help="Previously saved status/response JSON; prevents stale-owner actions.")
         if name == "frame":
             command.add_argument("--output", required=True, help="New PNG destination.")
+        elif name == "turn-claim":
+            command.add_argument("--controller-id", required=True, help="Stable identity for the sole cooperating action controller.")
+        elif name in ("turn-check", "turn-release"):
+            command.add_argument("--turn-lease", required=True, help="Private JSON turn-claim receipt; separate from native control generation.")
         elif name == "control":
             command.add_argument("owner", choices=("agent", "human"))
             command.add_argument("--resume", action="store_true")
@@ -96,7 +103,8 @@ def main(argv=None):
         if args.command == "serve":
             from .backend import DOSBoxBackend
             config = {name: getattr(args, name) for name in ("project", "program", "game_dir", "executable", "image")}
-            service = PlayService(lambda: DOSBoxBackend(config), args.directory, manual_control=args.manual_control)
+            service = PlayService(lambda: DOSBoxBackend(config), args.directory, manual_control=args.manual_control,
+                                  ownership_viewer=args.ownership_viewer)
             previous = {sig: signal.signal(sig, lambda *_: service.request_stop())
                         for sig in (signal.SIGINT, signal.SIGTERM)}
             try:
@@ -106,6 +114,13 @@ def main(argv=None):
                     signal.signal(sig, handler)
             return 0
         params = {}
+        if args.command == "turn-claim":
+            params = {"controller_id": args.controller_id}
+        elif args.command in ("turn-check", "turn-release"):
+            document = json.loads(private_file(args.turn_lease, limit=8192))
+            if not isinstance(document, dict):
+                raise ValueError("Expected an object turn-claim receipt")
+            params = {"lease": document.get("result", document)}
         if args.command == "harness-save":
             params = {"definition": read_definition(args.definition)}
             if args.parent is not None:
