@@ -1,3 +1,5 @@
+> Current inspection: [16 November code and live-viewer analysis](CODEX_VIEWER_CODE_ANALYSIS.md).
+
 > Preserved investigation from 14 November 2026. This is historical static
 > client evidence, not a current live harness integration test. The standalone
 > engine uses the ordinary desktop input path and leaves platform ownership

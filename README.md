@@ -26,3 +26,7 @@ standalone cut. Audio transport is also deferred. There is no published release
 or qualified Dot cloud installation yet.
 
 [Verification](docs/evidence/standalone-engine-2026-11-16.json) · [Extraction boundary](docs/EXTRACTION.md) · [Product brief](docs/PRODUCT.md) · [Repositories](docs/REPOSITORIES.md)
+
+See the [Codex viewer code investigation](docs/CODEX_VIEWER_CODE_ANALYSIS.md) for
+ownership signals, actual-source offline checks, live viewer results and remaining
+bridge boundaries. Audio and game work remain deferred.
