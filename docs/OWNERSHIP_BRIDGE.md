@@ -298,3 +298,32 @@ the same lease around a completed input and its observed effect. A second
 controller, a larger TTL or the headless runtime's successful data callbacks
 would not establish this check. No third-party code was imported or executed;
 sound and gameplay additions remain deferred.
+
+### Original-computer network controls check
+
+The [current controls receipt](evidence/original-computer-network-controls-2026-11-16.json)
+records a further in-place grant investigation. Dot reports no
+`cloud_environment.environment_status`, `cloud_environment.request_changes` or
+equivalent running-machine network editor. Its checked shell has no
+`/etc/codex/network-policy.json`; effective enforcement and VPN readiness remain
+unknown. Its stated destination restriction is not independently read policy.
+
+The coordinator inspected the current Pro account UI. **Work network access was
+already on**. Cloud computer settings exposed cookies and website approvals;
+the Codex Cloud list exposed saved configurations without establishing a
+binding to the original Dot computer. No setting was changed. Official
+[Work network guidance](https://learn.chatgpt.com/docs/enterprise/chatgpt-work-overview#network-access-and-external-destinations)
+describes public internet access, while
+[execution scope guidance](https://learn.chatgpt.com/docs/enterprise/agent-security#how-agent-security-applies-to-work-cloud)
+distinguishes Dot computers from managed Codex environments. Neither establishes
+a private TCP grant from this already-enabled preference. The inspected shipped
+account-setting setter accepts a boolean; its separate existing-instance editor
+requires the bound conversation, runtime and configuration identities.
+
+The original Dot menu also offers Reboot. No original-runtime preservation or
+network-policy refresh guarantee was established, so it was not used as a
+network repair. No new access proposal, probe, environment switch, restart or
+desktop input occurred. Network access remains unresolved; the actual input,
+takeover and interruption-recovery gates were not executed. Resume those checks
+after a supported grant/client is available in the original desktop executor;
+do not substitute saved-config edits, another desktop or relaxed freshness.
