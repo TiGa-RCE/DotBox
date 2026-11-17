@@ -267,3 +267,34 @@ No keyboard/mouse input was issued. The checked tools still do not expose a
 supported coordinator client in the original desktop executor, the retained
 receiver in Dot's attachment list, or a private preview/cross-thread command
 route. These are remaining capability gates, not immutable platform limits.
+
+## Physical-controller comparison and original-executor route
+
+The related [Claude Code/SNES demonstration](https://youtu.be/f2cLBiSWRyY?t=1346)
+separates tool building from play. Its later
+[cursor helper](https://youtu.be/f2cLBiSWRyY?t=2418) illustrates incremental
+harness growth, without a measured speedup. The linked repository's pinned
+[`step` command](https://github.com/dev-dull/questionable_commands/blob/48e8acd442d26c6d282a55875c21d57d8e71efef/cc/30102026-0x002-AI_plays_snes/bin/step#L37)
+performs a local action, waits and captures locally. Its
+[`gpio_lock`](https://github.com/dev-dull/questionable_commands/blob/48e8acd442d26c6d282a55875c21d57d8e71efef/cc/30102026-0x002-AI_plays_snes/lib/snespad.py#L120)
+serializes processes; it does not observe human takeover. This is a useful
+same-executor orchestration pattern, not a supplied Codex ownership integration.
+
+The [follow-up receipt](evidence/controller-prior-art-2026-11-16.json) records a
+separate read-only inventory on Dot's original cloud shell. SSH was present;
+the Tailscale CLI, operations runbook and reviewed SSH helper were absent at the
+checked locations. Absence of those files does not prove network isolation.
+Dot then declined a bounded probe of the established managed-proxy/Studio SSH
+route under its stated shell network policy. No connection was attempted: there
+is no HTTP result, SSH banner or remote command from this executor. This is a
+reported policy boundary, not a reproduced TCP refusal or an independently read
+effective allowlist. The original cloud context stayed selected and no desktop
+input was issued.
+
+Keep the next acceptance check on that original executor. It needs a supported
+way to query the coordinator alongside its existing desktop tools without
+switching environments. Retain the three-second freshness contract and verify
+the same lease around a completed input and its observed effect. A second
+controller, a larger TTL or the headless runtime's successful data callbacks
+would not establish this check. No third-party code was imported or executed;
+sound and gameplay additions remain deferred.
