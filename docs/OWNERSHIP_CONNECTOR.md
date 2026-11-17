@@ -72,17 +72,93 @@ protect that credential from a compromised connector process.
 ## Connection review
 
 [The permissions proposal](../connectors/ownership/permissions.review.json)
-is prepared for review, not activation. No public endpoint, domain, DNS change,
-OAuth registration, cloud access or ChatGPT connection is enabled.
+records the selected private-tunnel route and its verification state. The user
+authorized connection setup on 16 November 2026. No public endpoint, domain,
+DNS change or OAuth provider is needed for that route.
+
+### Private Secure MCP Tunnel
+
+The explicit private-tunnel launcher keeps the same local HTTP bearer checks:
+
+```sh
+dotbox-ownership-connector --session '<private-directory>/session.json' \
+  --viewer-id '<lowercase-viewer-sha256>' --port 8787 --private-tunnel \
+  --tunnel-header-file '<owned-0700-directory>/mcp-authorization'
+```
+
+The header file must be new. It contains the full local Bearer header, stays
+0600 and is distinct from the coordinator, publisher and tunnel runtime keys.
+The local credential lasts for the connector process; authenticated request
+claims expire after at most 60 seconds. Restarting the connector creates a new
+local credential, so restart its tunnel client too. Shutdown removes the owned
+header. Concurrent replacements are restored where possible or preserved in a
+private `.dotbox-tunnel-cleanup-*` directory without overwriting a newer entry.
+The private-directory mechanism does not isolate malicious processes sharing
+the user's OS identity.
+
+Install the supported client with `brew install openai/tools/tunnel-client` on
+macOS. Pin and record the actually installed version; this setup uses 0.0.21.
+Use the supplied existing tunnel, a runtime key restricted to **Tunnels Read +
+Use**, and a private profile containing only references:
+
+```yaml
+config_version: 1
+control_plane:
+  tunnel_id: <existing-private-tunnel-id>
+  api_key: file:/private/operator/runtime-key
+  poll_channels: [main]
+mcp:
+  server_urls:
+    - channel: main
+      url: http://127.0.0.1:8787/mcp
+  extra_headers:
+    Authorization: file:/private/operator/mcp-authorization
+  oauth_discovery: disabled
+health:
+  listen_addr: 127.0.0.1:0
+  url_file: /private/operator/tunnel-health-url
+```
+
+The client initiates outbound HTTPS to OpenAI. Keep admin UI/health on loopback;
+enable only `main`, without Harpoon or arbitrary HTTP targets. Inspect the
+selected tunnel's organization/workspace access and actual readiness before
+connecting the private app. Do not infer readiness from a running process.
+Run `tunnel-client doctor --profile-file '<private-profile>' --explain`, then
+`tunnel-client run --profile-file '<private-profile>'` in an owned foreground
+session. This setup does not claim login/startup persistence. The inspected
+0.0.21 `runtimes connect` writer replaces its profile rather than preserving
+extra headers/discovery/channel settings, so it was not used for this profile.
+
+In ChatGPT's custom MCP form, select **Tunnel** and **No authentication**. Here
+that setting means no separate user OAuth flow: OpenAI's tunnel access controls
+protect the private app, and the tunnel client supplies the distinct local
+Bearer header. The tool therefore advertises `noauth` in this mode. Direct
+unauthenticated HTTP and in-memory tool reads remain denied. Check doctor,
+runtime health and an actual Dot tool call before claiming a connection.
+
+See the official [tunnel setup](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+and [restricted-key guidance](https://github.com/openai/tunnel-client/blob/v0.0.21/docs/permissions.md).
+
+### Separate public OAuth route
+
 `create_server` accepts an external token verifier and issuer/resource URLs for
 later integration; it neither selects nor implements an authorization provider.
-Activation still requires final endpoint and owner/client bindings, HTTPS,
+A public OAuth deployment still requires endpoint and owner/client bindings, HTTPS,
 OAuth 2.1 authorization code with PKCE, resource/audience validation,
 issuer/signature/expiry/scope checks and DNS-rebinding protection.
 [ChatGPT's authentication requirements](https://developers.openai.com/plugins/build/auth)
 do not support a custom static Bearer API key as a substitute for this flow.
 
-Local qualification uses real authenticated MCP HTTP and a synthetic ownership
-publisher. It does not establish a live viewer connection, original-Dot access,
-desktop input, handoff or interruption recovery. Sound and gameplay remain
-deferred.
+Local regression checks use real authenticated MCP HTTP and a synthetic ownership
+publisher. The separate [live receipt](evidence/ownership-connector-live-2026-11-16.json)
+matches actual Dot tool replies to the selected viewer and receiver. Its three
+foreground observation windows establish Dot, human after Take over, and Dot
+after Return control. A fourth Dot read and an independent connector read both
+return unknown after the source stops.
+
+Fresh ownership requires the bounded observer to run inside an active CUA call.
+Unawaited background attempts produced no AX observations and were rejected as
+unknown; they are excluded from the live proof. No unattended sampler is
+delivered. Keep the coordinator, connector and tunnel sessions running for tool
+access; paused sampling correctly remains unknown. Actual desktop input, an
+atomic capture lock, sound and gameplay remain deferred.

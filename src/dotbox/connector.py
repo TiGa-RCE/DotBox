@@ -1,19 +1,26 @@
 """One read-only MCP projection of an explicitly bound ownership coordinator.
 
-The optional SDK is imported only when building/launching the MCP server. The
-local launcher is a bearer-authenticated test fixture, not a ChatGPT OAuth login.
+The optional SDK is imported only when building/launching the MCP server. Both
+launch modes require a local HTTP bearer; a private tunnel supplies app access
+control separately. Neither mode implements a user OAuth login.
 """
 
 import argparse
+from contextlib import contextmanager, nullcontext
 import json
 import math
+import os
+from pathlib import Path
 import re
+import secrets
+import signal
+import stat
 import sys
 import time
 from typing import Literal, TypedDict
 from urllib.parse import urlsplit
 
-from .client import Client
+from .client import Client, private_file
 from .local_auth import LocalCredential
 
 
@@ -108,11 +115,12 @@ def _http_url(value):
     return parsed
 
 
-def create_server(reader, *, token_verifier, issuer_url, resource_url):
-    """Build a protected MCP resource server; the approved issuer is external.
+def create_server(reader, *, token_verifier, issuer_url, resource_url, private_tunnel=False):
+    """Build a protected MCP resource server; any OAuth issuer is external.
 
     A production verifier must validate issuer/signature/audience/expiry/scope.
-    This factory neither issues tokens nor configures an authorization server.
+    Private-tunnel metadata advertises no user OAuth while preserving local
+    bearer checks. This factory never configures the tunnel or its access rules.
     """
     from mcp.server import MCPServer
     from mcp.server.auth.middleware.auth_context import get_access_token
@@ -123,8 +131,13 @@ def create_server(reader, *, token_verifier, issuer_url, resource_url):
 
     if not isinstance(reader, OwnershipReader) or token_verifier is None:
         raise ValueError("A bound ownership reader and token verifier are required")
-    _http_url(issuer_url)
-    if _http_url(resource_url).path != "/mcp":
+    issuer = _http_url(issuer_url)
+    resource = _http_url(resource_url)
+    if type(private_tunnel) is not bool:
+        raise ValueError("private_tunnel must be boolean")
+    if private_tunnel and (issuer.hostname != "127.0.0.1" or resource.hostname != "127.0.0.1"):
+        raise ValueError("Private tunnel upstream URLs must use IPv4 loopback")
+    if resource.path != "/mcp":
         raise ValueError("The resource URL must identify the exact /mcp endpoint")
     class ReadOnlyServer(MCPServer):
         # The pinned SDK normally ignores extra function arguments. Enforce the
@@ -156,7 +169,8 @@ def create_server(reader, *, token_verifier, issuer_url, resource_url):
                  description="Read the bound coordinator's ownership snapshot; never authorizes input.",
                  annotations=ToolAnnotations(read_only_hint=True, destructive_hint=False,
                                              idempotent_hint=True, open_world_hint=False),
-                 meta={"securitySchemes": [{"type": "oauth2", "scopes": [READ_SCOPE]}]})
+                 meta={"securitySchemes": ([{"type": "noauth"}] if private_tunnel else
+                                            [{"type": "oauth2", "scopes": [READ_SCOPE]}])})
     def ownership_status() -> OwnershipSnapshot:
         # The SDK's in-memory and stdio transports bypass HTTP authentication.
         # Refuse ownership data there as well as after a token expires in queue.
@@ -170,7 +184,7 @@ def create_server(reader, *, token_verifier, issuer_url, resource_url):
 
 
 class LocalTestVerifier:
-    """A separate short-lived credential for loopback HTTP tests, not OAuth."""
+    """A separate local HTTP credential, never a user OAuth or tunnel API key."""
 
     def __init__(self, credential, resource_url, *, expires_at):
         self._credential = credential
@@ -179,10 +193,83 @@ class LocalTestVerifier:
 
     async def verify_token(self, token):
         from mcp.server.auth.provider import AccessToken
-        if time.time() >= self._expires_at or not self._credential.check(token):
+        if ((self._expires_at is not None and time.time() >= self._expires_at)
+                or not self._credential.check(token)):
             return None
+        # A private-tunnel credential lives with this process. Its per-request
+        # claims remain short-lived so the handler still rejects expired queues.
+        deadline = int(time.time()) + 60 if self._expires_at is None else int(self._expires_at)
         return AccessToken(token=token, client_id="dotbox-local-test", scopes=[READ_SCOPE],
-                           expires_at=int(self._expires_at), resource=self._resource)
+                           expires_at=deadline, resource=self._resource)
+
+
+@contextmanager
+def _tunnel_header(path, credential):
+    """Publish a new private header file; remove only the inode we created."""
+    path = Path(path).expanduser().absolute()
+    parent = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | getattr(os, "O_NOFOLLOW", 0))
+    identity = None
+    fd = None
+    try:
+        directory = os.fstat(parent)
+        if (not stat.S_ISDIR(directory.st_mode) or directory.st_uid != os.getuid()
+                or stat.S_IMODE(directory.st_mode) != 0o700):
+            raise ValueError("Tunnel header parent must be an owned private directory (0700)")
+        fd = os.open(path.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                     getattr(os, "O_NOFOLLOW", 0), 0o600, dir_fd=parent)
+        with os.fdopen(fd, "wb", closefd=False) as output:
+            info = os.fstat(output.fileno())
+            identity = (info.st_dev, info.st_ino)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_nlink != 1:
+                raise ValueError("Expected a new owned regular tunnel header file")
+            os.fchmod(output.fileno(), 0o600)
+            output.write(b"Bearer " + private_file(credential.path).strip() + b"\n")
+            output.flush()
+            os.fsync(output.fileno())
+        yield path
+    finally:
+        try:
+            if identity is not None:
+                quarantine = ".dotbox-tunnel-cleanup-" + secrets.token_hex(16)
+                os.mkdir(quarantine, 0o700, dir_fd=parent)
+                captured = None
+                try:
+                    captured = os.open(quarantine, os.O_RDONLY | os.O_DIRECTORY |
+                                       getattr(os, "O_NOFOLLOW", 0), dir_fd=parent)
+                    # Isolate the public name atomically before inspecting it.
+                    # This private random directory is not a trust boundary
+                    # against malicious processes running under the same UID.
+                    try:
+                        os.rename(path.name, "header", src_dir_fd=parent, dst_dir_fd=captured)
+                    except FileNotFoundError:
+                        pass
+                    else:
+                        current = os.stat("header", dir_fd=captured, follow_symlinks=False)
+                        if stat.S_ISREG(current.st_mode) and (current.st_dev, current.st_ino) == identity:
+                            os.unlink("header", dir_fd=captured)
+                        elif stat.S_ISREG(current.st_mode) or stat.S_ISLNK(current.st_mode):
+                            try:
+                                os.link("header", path.name, src_dir_fd=captured,
+                                        dst_dir_fd=parent, follow_symlinks=False)
+                            except OSError:
+                                # A newer public entry or failed restoration
+                                # leaves the foreign entry intact in quarantine.
+                                pass
+                            else:
+                                os.unlink("header", dir_fd=captured)
+                finally:
+                    if captured is not None:
+                        os.close(captured)
+                    try:
+                        os.rmdir(quarantine, dir_fd=parent)
+                    except OSError:
+                        pass  # Preserve every unresolved captured entry.
+        finally:
+            try:
+                if fd is not None:
+                    os.close(fd)  # Prevent inode reuse until cleanup is complete.
+            finally:
+                os.close(parent)
 
 
 def local_transport_security():
@@ -196,27 +283,42 @@ def main(argv=None):
     parser.add_argument("--session", required=True, help="Private coordinator session.json")
     parser.add_argument("--viewer-id", required=True, help="Expected lowercase viewer SHA-256")
     parser.add_argument("--port", type=int, default=8787)
-    parser.add_argument("--local-test", action="store_true",
-                        help="Required: short-lived loopback bearer fixture, not ChatGPT OAuth")
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--local-test", action="store_true",
+                      help="Short-lived loopback bearer fixture, not ChatGPT OAuth")
+    mode.add_argument("--private-tunnel", action="store_true",
+                      help="Private tunnel controls app access; local HTTP bearer remains required")
+    parser.add_argument("--tunnel-header-file", help="New full Bearer header file in an owned 0700 directory")
     args = parser.parse_args(argv)
-    if not args.local_test or not 1024 <= args.port <= 65535:
-        parser.error("Use --local-test and an unprivileged port (1024..65535)")
+    if not 1024 <= args.port <= 65535 or args.private_tunnel != bool(args.tunnel_header_file):
+        parser.error("Use an unprivileged port; --private-tunnel requires --tunnel-header-file exclusively")
+    previous = {}
     try:
+        if args.private_tunnel:
+            def interrupted(*_):
+                raise KeyboardInterrupt
+            previous = {sig: signal.signal(sig, interrupted) for sig in (signal.SIGINT, signal.SIGTERM)}
         reader = OwnershipReader(args.session, args.viewer_id)
         resource = f"http://127.0.0.1:{args.port}/mcp"
         with LocalCredential("dotbox-mcp-local-") as credential:
-            expires_at = int(time.time()) + 600
+            expires_at = None if args.private_tunnel else int(time.time()) + 600
             verifier = LocalTestVerifier(credential, resource, expires_at=expires_at)
             server = create_server(reader, token_verifier=verifier,
                                    issuer_url=f"http://127.0.0.1:{args.port}/local-test-issuer",
-                                   resource_url=resource)
-            print(json.dumps({"local_test_only": True, "resource": resource,
-                              "token_file": str(credential.path), "scope": READ_SCOPE,
-                              "expires_at": expires_at}), flush=True)
-            server.run(transport="streamable-http", host="127.0.0.1", port=args.port,
-                       json_response=True, stateless_http=True,
-                       max_request_body_size=MAX_MCP_REQUEST,
-                       transport_security=local_transport_security())
+                                   resource_url=resource, private_tunnel=args.private_tunnel)
+            header = _tunnel_header(args.tunnel_header_file, credential) if args.private_tunnel else nullcontext()
+            with header as published:
+                configuration = ({"private_tunnel_only": True, "resource": resource,
+                                  "tunnel_header_file": str(published), "scope": READ_SCOPE,
+                                  "credential_lifetime": "process"} if args.private_tunnel else
+                                 {"local_test_only": True, "resource": resource,
+                                  "token_file": str(credential.path), "scope": READ_SCOPE,
+                                  "expires_at": expires_at})
+                print(json.dumps(configuration), flush=True)
+                server.run(transport="streamable-http", host="127.0.0.1", port=args.port,
+                           json_response=True, stateless_http=True,
+                           max_request_body_size=MAX_MCP_REQUEST,
+                           transport_security=local_transport_security())
         return 0
     except KeyboardInterrupt:
         return 130
@@ -227,6 +329,9 @@ def main(argv=None):
         print("Connector configuration or local transport failed; inspect private operator state.",
               file=sys.stderr)
         return 2
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
 
 
 if __name__ == "__main__":

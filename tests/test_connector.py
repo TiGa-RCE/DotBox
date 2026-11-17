@@ -107,7 +107,7 @@ class ClaimVariants:
 
 
 @contextmanager
-def running_http(reader):
+def running_http(reader, *, private_tunnel=False):
     pytest.importorskip("mcp")
     uvicorn = pytest.importorskip("uvicorn")
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -119,7 +119,8 @@ def running_http(reader):
         normal = LocalTestVerifier(credential, resource, expires_at=time.time() + 60)
         server = create_server(reader, token_verifier=ClaimVariants(normal, resource),
                                issuer_url=resource.removesuffix("/mcp") + "/issuer",
-                               resource_url=resource)
+                               resource_url=resource,
+                               **({"private_tunnel": True} if private_tunnel else {}))
         app = server.streamable_http_app(json_response=True, stateless_http=True,
                                         max_request_body_size=8192,
                                         transport_security=local_transport_security())
@@ -209,7 +210,8 @@ def test_real_mcp_client_lists_one_read_tool_projects_only_status_and_rejects_ar
     assert not receiver.worker.is_alive()
 
 
-def test_in_memory_transport_does_not_bypass_ownership_tool_authentication(receiver, monkeypatch):
+@pytest.mark.parametrize("private_tunnel", [False, True])
+def test_in_memory_transport_does_not_bypass_ownership_tool_authentication(receiver, monkeypatch, private_tunnel):
     mcp = pytest.importorskip("mcp")
     reader = OwnershipReader(receiver.descriptor, VIEWER)
     calls = []
@@ -224,7 +226,8 @@ def test_in_memory_transport_does_not_bypass_ownership_tool_authentication(recei
         resource = "http://127.0.0.1:8787/mcp"
         server = create_server(reader, token_verifier=LocalTestVerifier(
             credential, resource, expires_at=int(time.time()) + 60),
-            issuer_url="http://127.0.0.1:8787/local-test-issuer", resource_url=resource)
+            issuer_url="http://127.0.0.1:8787/local-test-issuer", resource_url=resource,
+            **({"private_tunnel": True} if private_tunnel else {}))
 
         async def exercise():
             async with mcp.Client(server, cache=None) as client:
@@ -233,6 +236,35 @@ def test_in_memory_transport_does_not_bypass_ownership_tool_authentication(recei
 
         asyncio.run(exercise())
     assert calls == []
+
+
+def test_private_tunnel_metadata_does_not_remove_local_http_authentication(receiver):
+    mcp = pytest.importorskip("mcp")
+    httpx2 = pytest.importorskip("httpx2")
+    from mcp.client.streamable_http import streamable_http_client
+
+    receiver.publish()
+    with running_http(OwnershipReader(receiver.descriptor, VIEWER), private_tunnel=True) as http:
+        async def exercise():
+            async with httpx2.AsyncClient(trust_env=False) as transport:
+                for bearer, expected in ((None, 401), ("without-scope", 403), ("wrong-audience", 401)):
+                    headers = {"Accept": "application/json, text/event-stream"}
+                    if bearer is not None:
+                        headers["Authorization"] = f"Bearer {bearer}"
+                    denied = await transport.post(http.url, headers=headers,
+                        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+                    assert denied.status_code == expected
+                transport.headers["Authorization"] = f"Bearer {http.token}"
+                async with mcp.Client(streamable_http_client(http.url, http_client=transport),
+                                      cache=None) as client:
+                    tools = (await client.list_tools()).tools
+                    assert [tool.name for tool in tools] == [TOOL_NAME]
+                    assert tools[0].meta["securitySchemes"] == [{"type": "noauth"}]
+                    result = await client.call_tool(TOOL_NAME, {})
+                    assert not result.is_error and result.structured_content["owner"] == "dot"
+                    assert (await client.call_tool(TOOL_NAME, {"op": "turn-claim"})).is_error
+
+        asyncio.run(exercise())
 
 
 def test_reader_does_not_claim_release_renew_or_cache_and_expiry_stays_visible(receiver):
@@ -400,7 +432,11 @@ def test_real_http_rejects_untrusted_host_and_origin_before_tool_call(receiver, 
     assert calls == []
 
 
-def test_local_launcher_serves_authenticated_status_and_cleans_generated_credential(receiver, tmp_path):
+@pytest.mark.parametrize(("private_tunnel", "stop_signal"), [
+    (False, signal.SIGINT), (True, signal.SIGINT), (True, signal.SIGTERM),
+])
+def test_local_launcher_serves_authenticated_status_and_cleans_generated_credential(receiver, tmp_path,
+                                                                                   private_tunnel, stop_signal):
     mcp = pytest.importorskip("mcp")
     httpx2 = pytest.importorskip("httpx2")
     from mcp.client.streamable_http import streamable_http_client
@@ -413,10 +449,13 @@ def test_local_launcher_serves_authenticated_status_and_cleans_generated_credent
     errors = tmp_path / "launcher.err"
     task_env = os.environ.copy()
     task_env["TMPDIR"] = str(tmp_path)
+    header_path = tmp_path / "tunnel-authorization"
+    mode = (["--private-tunnel", "--tunnel-header-file", str(header_path)] if private_tunnel else
+            ["--local-test"])
     with output.open("w") as stdout, errors.open("w") as stderr:
         process = subprocess.Popen(
             [sys.executable, "-m", "dotbox.connector", "--session", str(receiver.descriptor),
-             "--viewer-id", VIEWER, "--port", str(port), "--local-test"],
+             "--viewer-id", VIEWER, "--port", str(port), *mode],
             cwd=tmp_path, env=task_env, stdout=stdout, stderr=stderr)
         try:
             deadline = time.monotonic() + 5
@@ -429,13 +468,24 @@ def test_local_launcher_serves_authenticated_status_and_cleans_generated_credent
                 else:
                     assert time.monotonic() < deadline, "Connector did not print launch configuration"
                     time.sleep(0.02)
-            token_path = Path(configuration["token_file"])
-            token = token_path.read_text().strip()
+            if private_tunnel:
+                assert configuration["private_tunnel_only"] is True
+                assert configuration["credential_lifetime"] == "process"
+                assert configuration["tunnel_header_file"] == str(header_path)
+                assert "token_file" not in configuration and "expires_at" not in configuration
+                header = header_path.read_text().strip()
+                assert header.startswith("Bearer ")
+                token = header.removeprefix("Bearer ")
+                assert header_path.stat().st_mode & 0o777 == 0o600
+                assert header_path.parent.stat().st_mode & 0o777 == 0o700
+            else:
+                token_path = Path(configuration["token_file"])
+                token = token_path.read_text().strip()
+                assert token_path.stat().st_mode & 0o777 == 0o600
+                assert configuration["local_test_only"] is True
+                assert 590 < configuration["expires_at"] - time.time() <= 600
             assert token not in (receiver.client.token, receiver.publisher.token)
-            assert token_path.stat().st_mode & 0o777 == 0o600
-            assert configuration["local_test_only"] is True
             assert configuration["scope"] == READ_SCOPE
-            assert 590 < configuration["expires_at"] - time.time() <= 600
 
             async def exercise():
                 async with httpx2.AsyncClient(
@@ -456,6 +506,10 @@ def test_local_launcher_serves_authenticated_status_and_cleans_generated_credent
                         await asyncio.sleep(0.02)
                     async with mcp.Client(streamable_http_client(
                         configuration["resource"], http_client=http), cache=None) as client:
+                        tools = (await client.list_tools()).tools
+                        expected = [{"type": "noauth"}] if private_tunnel else [
+                            {"type": "oauth2", "scopes": [READ_SCOPE]}]
+                        assert tools[0].meta["securitySchemes"] == expected
                         result = await client.call_tool(TOOL_NAME, {})
                         assert not result.is_error and result.structured_content["owner"] == "dot"
                         assert result.structured_content["fresh"]
@@ -463,14 +517,201 @@ def test_local_launcher_serves_authenticated_status_and_cleans_generated_credent
             asyncio.run(exercise())
         finally:
             if process.poll() is None:
-                process.send_signal(signal.SIGINT)
+                process.send_signal(stop_signal)
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=3)
                 pytest.fail("Connector launcher did not stop on interruption")
-    assert not token_path.exists() and not token_path.parent.exists()
+    if private_tunnel:
+        assert not header_path.exists()
+        assert not list(tmp_path.glob("dotbox-mcp-local-*"))
+    else:
+        assert not token_path.exists() and not token_path.parent.exists()
     assert process.returncode == 130
     assert token not in output.read_text() and token not in errors.read_text()
     assert not receiver.service.stop_requested.is_set() and receiver.service.backend is None
+
+
+@pytest.mark.parametrize("case", ["existing", "symlink", "public-parent", "symlink-parent"])
+def test_tunnel_header_refuses_unsafe_or_existing_paths_without_overwriting(tmp_path, case):
+    parent = tmp_path / "headers"
+    parent.mkdir(mode=0o700)
+    header = parent / "authorization"
+    target = tmp_path / "existing-private-value"
+    target.write_text("preserve this value")
+    target.chmod(0o600)
+    if case == "existing":
+        header.write_text("preserve existing header")
+        header.chmod(0o600)
+    elif case == "symlink":
+        header.symlink_to(target)
+    elif case == "public-parent":
+        parent.chmod(0o755)
+    else:
+        alias = tmp_path / "header-directory-alias"
+        alias.symlink_to(parent, target_is_directory=True)
+        header = alias / "authorization"
+    with LocalCredential("dotbox-header-negative-") as credential:
+        with pytest.raises((OSError, ValueError)):
+            with connector._tunnel_header(header, credential):
+                pytest.fail("An unsafe header was published")
+    assert target.read_text() == "preserve this value"
+    if case == "existing":
+        assert header.read_text() == "preserve existing header"
+    elif case == "symlink":
+        assert header.is_symlink()
+    else:
+        assert not header.exists()
+
+
+@pytest.mark.parametrize("replacement_kind", ["regular", "symlink"])
+def test_tunnel_header_cleanup_preserves_a_replacement_file(tmp_path, replacement_kind):
+    header = tmp_path / "authorization"
+    with LocalCredential("dotbox-header-replacement-") as credential:
+        with connector._tunnel_header(header, credential):
+            assert header.read_text() == "Bearer " + credential.path.read_text()
+            header.unlink()
+            if replacement_kind == "symlink":
+                target = tmp_path / "operator-target"
+                target.write_text("operator replacement")
+                header.symlink_to(target)
+            else:
+                header.write_text("operator replacement")
+                header.chmod(0o600)
+        assert header.read_text() == "operator replacement"
+        if replacement_kind == "symlink":
+            assert header.is_symlink() and header.readlink() == target
+        assert not list(tmp_path.glob(".dotbox-tunnel-cleanup-*"))
+
+
+def test_tunnel_header_public_name_race_cannot_delete_an_operator_replacement(tmp_path, monkeypatch):
+    header = tmp_path / "authorization"
+    actual_stat, actual_rename = os.stat, os.rename
+    changed = []
+
+    def replace():
+        header.unlink()
+        header.write_text("operator replacement at cleanup boundary")
+        changed.append(True)
+
+    def stat_at_old_boundary(path, *args, **kwargs):
+        result = actual_stat(path, *args, **kwargs)
+        if path == header.name and kwargs.get("dir_fd") is not None and not changed:
+            replace()  # The former stat/unlink gap.
+        return result
+
+    def rename_at_capture(path, *args, **kwargs):
+        if path == header.name and kwargs.get("src_dir_fd") is not None and not changed:
+            replace()  # A replacement just before atomic capture must be preserved.
+        return actual_rename(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "stat", stat_at_old_boundary)
+    monkeypatch.setattr(os, "rename", rename_at_capture)
+    with LocalCredential("dotbox-header-public-race-") as credential:
+        with connector._tunnel_header(header, credential):
+            pass
+    assert changed
+    assert header.read_text() == "operator replacement at cleanup boundary"
+
+
+@pytest.mark.parametrize("foreign_kind", ["regular", "symlink"])
+def test_tunnel_header_preserves_captured_foreign_entry_when_new_public_name_exists(tmp_path,
+                                                                                  monkeypatch, foreign_kind):
+    header = tmp_path / "authorization"
+    foreign = tmp_path / "operator-value"
+    foreign.write_text("original operator value")
+    actual_rename = os.rename
+
+    def race_after_capture(path, *args, **kwargs):
+        result = actual_rename(path, *args, **kwargs)
+        if path == header.name and kwargs.get("src_dir_fd") is not None:
+            header.write_text("newer operator public value")
+        return result
+
+    monkeypatch.setattr(os, "rename", race_after_capture)
+    with LocalCredential("dotbox-header-restore-race-") as credential:
+        with connector._tunnel_header(header, credential):
+            header.unlink()
+            if foreign_kind == "regular":
+                header.write_text("captured operator value")
+            else:
+                header.symlink_to(foreign)
+    assert header.read_text() == "newer operator public value"
+    quarantines = list(tmp_path.glob(".dotbox-tunnel-cleanup-*"))
+    assert len(quarantines) == 1
+    assert quarantines[0].stat().st_mode & 0o777 == 0o700
+    captured = list(quarantines[0].iterdir())
+    assert len(captured) == 1
+    if foreign_kind == "regular":
+        assert captured[0].read_text() == "captured operator value"
+    else:
+        assert captured[0].is_symlink() and captured[0].readlink() == foreign
+        assert foreign.read_text() == "original operator value"
+
+
+def test_tunnel_header_keeps_original_inode_open_until_cleanup(tmp_path, monkeypatch):
+    header = tmp_path / "authorization"
+    actual_open = os.open
+    created = []
+
+    def remember_header_fd(path, flags, *args, **kwargs):
+        fd = actual_open(path, flags, *args, **kwargs)
+        if path == header.name and flags & os.O_CREAT:
+            created.append(fd)
+        return fd
+
+    monkeypatch.setattr(os, "open", remember_header_fd)
+    with LocalCredential("dotbox-header-inode-lifetime-") as credential:
+        with connector._tunnel_header(header, credential):
+            identity = header.stat()
+            header.unlink()
+            held = os.fstat(created[0])
+            assert (held.st_dev, held.st_ino) == (identity.st_dev, identity.st_ino)
+            assert held.st_nlink == 0
+    with pytest.raises(OSError):
+        os.fstat(created[0])
+
+
+@pytest.mark.parametrize("arguments", [
+    ["--private-tunnel"],
+    ["--local-test", "--private-tunnel"],
+    ["--local-test", "--tunnel-header-file", "unused-header"],
+])
+def test_private_tunnel_launcher_rejects_invalid_mode_flags_before_credentials(receiver, monkeypatch, arguments):
+    def must_not_mint(*args, **kwargs):
+        pytest.fail("Invalid flags reached credential creation")
+    monkeypatch.setattr(connector, "LocalCredential", must_not_mint)
+    with pytest.raises(SystemExit) as error:
+        connector.main(["--session", str(receiver.descriptor), "--viewer-id", VIEWER, *arguments])
+    assert error.value.code == 2
+
+
+def test_private_tunnel_factory_rejects_a_public_resource(receiver):
+    pytest.importorskip("mcp")
+    reader = OwnershipReader(receiver.descriptor, VIEWER)
+    with LocalCredential("dotbox-tunnel-public-negative-") as credential:
+        resource = "https://public.example/mcp"
+        with pytest.raises(ValueError, match="loopback"):
+            create_server(reader, token_verifier=LocalTestVerifier(
+                credential, resource, expires_at=None),
+                issuer_url="http://127.0.0.1:8787/local-test-issuer",
+                resource_url=resource, private_tunnel=True)
+
+
+def test_process_lifetime_local_bearer_keeps_bounded_request_claims(tmp_path, monkeypatch):
+    pytest.importorskip("mcp")
+    now = [1000.0]
+    monkeypatch.setattr(connector, "time", SimpleNamespace(time=lambda: now[0]))
+    with LocalCredential("dotbox-tunnel-lifetime-") as credential:
+        bearer = credential.path.read_text().strip()
+        verifier = LocalTestVerifier(credential, "http://127.0.0.1:8787/mcp", expires_at=None)
+        first = asyncio.run(verifier.verify_token(bearer))
+        now[0] += 86400
+        later = asyncio.run(verifier.verify_token(bearer))
+        assert first.scopes == later.scopes == [READ_SCOPE]
+        assert first.resource == later.resource == "http://127.0.0.1:8787/mcp"
+        assert later.expires_at - first.expires_at == 86400
+        assert 0 < later.expires_at - now[0] <= 60
+        assert asyncio.run(verifier.verify_token("wrong-credential")) is None

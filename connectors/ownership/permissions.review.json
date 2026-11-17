@@ -1,17 +1,17 @@
 {
   "schema": "dotbox-ownership-connector-permissions-review-1",
-  "status": "prepared_pending_review",
-  "approval_recorded": false,
+  "status": "connected_live_read_only_verified",
+  "approval_recorded": true,
   "purpose": "Read a filtered ownership snapshot from one explicitly bound local coordinator",
   "proposed_remote_connection": {
-    "endpoint": "UNSELECTED",
-    "authorization_issuer": "UNSELECTED",
-    "authorization_provider": "UNSELECTED",
-    "oauth_client_binding": "UNSELECTED",
-    "single_owner_subject_binding": "UNSELECTED",
-    "owner_session_binding": "UNSELECTED",
-    "deployment": "UNSELECTED",
-    "enabled": false
+    "endpoint": "Existing OpenAI Secure MCP Tunnel; identifier retained privately",
+    "authorization_issuer": "No user OAuth issuer for selected tunnel route",
+    "authorization_provider": "OpenAI tunnel access controls plus a separate local HTTP Bearer credential",
+    "oauth_client_binding": "Not applicable to selected private-tunnel route",
+    "single_owner_subject_binding": "No OAuth subject binding claimed; intended organization verified and private custom plugin connected by the operator",
+    "owner_session_binding": "Pinned current coordinator instance and selected full viewer URL hash; identities retained privately",
+    "deployment": "Owned Studio IPv4-loopback coordinator and connector; owned foreground tunnel session",
+    "enabled": true
   },
   "tool": {
     "name": "dotbox_ownership_status",
@@ -41,6 +41,12 @@
       "File paths and file contents",
       "Frames and game state",
       "Raw backend replies and error details"
+    ],
+    "scope_boundary": "dotbox.ownership.read is enforced by the local HTTP verifier; external private-app access is enforced by the tunnel, without a separate user OAuth flow",
+    "private_tunnel_security_schemes": [
+      {
+        "type": "noauth"
+      }
     ]
   },
   "remote_capabilities_excluded": [
@@ -67,7 +73,8 @@
     "risk": "The adapter fixes its backend operation to status but does not isolate a compromised connector process from its broader local coordinator credential",
     "receiver_binding": "Pin current ownership-coordinator descriptor kind and instance; reject game/publisher descriptors and replacement receiver",
     "viewer_binding": "Pin explicitly configured lowercase SHA-256; do not disclose it remotely",
-    "legacy_descriptor_rule": "Deliberately stop/restart an old unmarked coordinator through normal controls; never manually tag an old or game session"
+    "legacy_descriptor_rule": "Deliberately stop/restart an old unmarked coordinator through normal controls; never manually tag an old or game session",
+    "mcp_credential_lifetime": "Process lifetime, with at-most-60-second authenticated request claims; separate from the 30-day tunnel runtime key"
   },
   "freshness": {
     "local_read_per_call": true,
@@ -93,6 +100,68 @@
     "authorization_server_implemented": false
   },
   "activation_requirements": [
+    "Keep the selected tunnel, organization access and private custom app binding",
+    "Keep runtime key restricted to Tunnels Read + Use; rotate before expiry",
+    "Keep distinct local coordinator, publisher, MCP and tunnel credentials private",
+    "Restart the tunnel client after restarting the MCP server, so it reloads the new local header",
+    "Run the bounded viewer observer for fresh ownership; stopped sampling must remain unknown",
+    "Reverify runtime readiness and an actual tool read after configuration changes"
+  ],
+  "not_activated": [
+    "Public DotBox deployment or listener",
+    "Public domain or DNS changes",
+    "OAuth issuer selection or registration",
+    "New cloud, SSH or tailnet access grants",
+    "Automatic login/startup service",
+    "Keyboard/mouse injection, sound or gameplay additions"
+  ],
+  "qualification_scope": "Three live tool reads by the original Dot chat matched the selected viewer and authenticated receiver by epoch/sequence: Dot, human after Take over, Dot after Return control. Bounded sampled observation only; no desktop-input or atomic handoff proof.",
+  "references": [
+    "https://developers.openai.com/plugins/build/auth",
+    "https://py.sdk.modelcontextprotocol.io/run/authorization/",
+    "https://developers.openai.com/api/docs/guides/secure-mcp-tunnels",
+    "https://github.com/openai/tunnel-client/blob/v0.0.21/docs/permissions.md"
+  ],
+  "authorization": "User authorized read-only setup, connecting Dot and live Take over/Return control verification on 16 November 2026; restricted-key browser creation and private local destination separately confirmed",
+  "private_tunnel": {
+    "supported_client": "tunnel-client 0.0.21, official Homebrew installation",
+    "connection": "Outbound HTTPS to OpenAI; no public DotBox listener or new inbound rule",
+    "runtime_key_permissions": [
+      "api.organization.tunnel.read",
+      "api.organization.tunnel.use"
+    ],
+    "runtime_key_lifetime_days": 30,
+    "runtime_key_storage": "Private 0600 local file outside Git; exact destination confirmed by user",
+    "poll_channels": [
+      "main"
+    ],
+    "arbitrary_http_callouts": false,
+    "local_upstream_authentication": "Separate full Bearer header read from a private file; missing/invalid HTTP bearer remains denied",
+    "oauth_discovery": "disabled for static-credential local upstream",
+    "health_and_admin_bind": "IPv4 loopback only",
+    "supervision": "Owned foreground run --profile-file; no startup persistence or native alias-supervision claim",
+    "profile_caveat": "The inspected 0.0.21 runtimes connect writer replaces full profiles, so it was not used for this header-bearing profile",
+    "bound_organization_verified": true,
+    "associated_organization_count": 1,
+    "workspace_ids_in_metadata": 0,
+    "private_custom_plugin_connected": true,
+    "actual_dot_reads_verified": 4
+  },
+  "source_sampling": {
+    "mode": "Bounded foreground CUA observer using existing mailbox/publisher",
+    "valid_source_samples": 285,
+    "live_ownership_sequence": [
+      "dot",
+      "human",
+      "dot"
+    ],
+    "after_sampling_stops": "Unknown, not fresh, zero remaining freshness; no cached Dot grant",
+    "persistent_unattended_sampler": false,
+    "no_atomic_input_lock_claimed": true,
+    "stopped_source_dot_read_verified": true,
+    "stopped_source_independent_connector_read_verified": true
+  },
+  "public_oauth_route_requirements": [
     "Select and review final HTTPS MCP endpoint and exact resource URL",
     "Select an approved OAuth 2.1 authorization server and publish required discovery metadata",
     "Support authorization code with PKCE and resource-bound access tokens",
@@ -101,17 +170,5 @@
     "Keep DNS-rebinding protection and reviewed host/origin restrictions",
     "Keep coordinator and MCP credentials separate and private",
     "Review final connection permissions before deployment or ChatGPT linking"
-  ],
-  "not_activated": [
-    "Public deployment or listener",
-    "Public domain or DNS changes",
-    "OAuth issuer selection, client registration or account grant",
-    "Cloud computer network access",
-    "ChatGPT or Dot connection"
-  ],
-  "qualification_scope": "Real authenticated local MCP HTTP with a synthetic ownership publisher; no live viewer or Dot connection, desktop input, handoff or interruption-recovery qualification",
-  "references": [
-    "https://developers.openai.com/plugins/build/auth",
-    "https://py.sdk.modelcontextprotocol.io/run/authorization/"
   ]
 }
