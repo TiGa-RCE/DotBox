@@ -27,6 +27,12 @@ verifies restored Studio attachment with a sandboxed default. In the checked
 attachment, Dot's desktop-tool session reinitialized and its bound cloud app
 variable was unavailable. The original cloud desktop and coordinator still need
 a shared supported execution path for the input check.
+The optional [ownership connector](docs/OWNERSHIP_CONNECTOR.md) exposes a filtered,
+read-only coordinator snapshot through authenticated local MCP HTTP. Its
+[connection permissions](connectors/ownership/permissions.review.json) are
+prepared for review; no public service or ChatGPT connection is activated.
+See the [local connector verification](docs/evidence/ownership-connector-2026-11-16.json)
+for the tested scope and remaining connection requirements.
 The [earlier preflight](docs/evidence/desktop-ownership-preflight-2026-11-16.json)
 also records the fix preventing asynchronous callbacks from being reported as
 completed synchronous actions.

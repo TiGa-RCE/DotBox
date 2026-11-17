@@ -8,6 +8,8 @@ from .service import PROTOCOL, TURN_OPS, PlayService, ProtocolError, authorized
 
 
 class CoordinationService(PlayService):
+    descriptor_kind = "ownership-coordinator"
+
     def __init__(self, directory, ownership_viewer, *, client_timeout=1.0,
                  credential_factory=None):
         if ownership_viewer is None:

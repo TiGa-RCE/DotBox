@@ -106,6 +106,8 @@ class PlayService:
     close, a stop request, or an unrecoverable backend failure.
     """
 
+    descriptor_kind = None
+
     def __init__(self, backend_factory, directory, *, manual_control=False,
                  client_timeout=1.0, credential_factory=None, ownership_viewer=None):
         if type(manual_control) is not bool:
@@ -369,6 +371,8 @@ class PlayService:
                     listener.settimeout(0.2)
                     descriptor = {"protocol": PROTOCOL, "host": "127.0.0.1", "port": listener.getsockname()[1],
                                   "instance_id": self.instance_id, "password_file": str(credential.path)}
+                    if self.descriptor_kind is not None:
+                        descriptor["kind"] = self.descriptor_kind
                     fd = os.open(descriptor_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                     published = True
                     with os.fdopen(fd, "wb") as output:
